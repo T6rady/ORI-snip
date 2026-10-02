@@ -1,0 +1,23 @@
+JACK SNIP 1.0.1
+
+Double-click JackSnip.exe. No installation required.
+
+Click Snip, drag an area, and release. Pen is selected automatically.
+Ctrl+C copies the image with all annotations. Capturing never automatically copies.
+Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
+
+Pen: draw with different widths and colors.
+Circle/Arrow: drag to create; choose a color.
+Check: click to place a green boxed check or drag to size it.
+Select: move stickers; drag corners to resize, or arrow endpoints to turn.
+Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
+
+Settings > Keyboard shortcut changes the global snipping shortcut.
+Default: Ctrl+Alt+S. Keep the app running for the global shortcut.
+
+Closing the window leaves a small tray process and releases the screenshot.
+Click the tray icon to snip. File > Exit quits entirely.
+Settings > Run at sign-in is optional and disabled by default.
+
+Keep the app in a writable folder; JackSnip.ini is created beside it when
+you save shortcut settings. Keep the accompanying runtime notices if sharing.

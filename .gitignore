@@ -1,0 +1,13 @@
+.tools/
+build/
+build-*/
+dist/JackSnip.ini
+dist/JackSnip-1.0-windows-x64.zip
+llvm-release.json
+test-output/
+self-test-results.txt
+smoke-test-*
+smoke-settings.ini
+*.obj
+*.pdb
+*.ilk

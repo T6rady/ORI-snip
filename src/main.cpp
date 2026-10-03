@@ -35,6 +35,7 @@ enum Command
     CircleTool,
     ArrowTool,
     CheckTool,
+    LineTool,
     CustomColor,
     SizeDown,
     SizeUp,
@@ -42,7 +43,12 @@ enum Command
     Startup,
     About,
     ColorFirst = 1100,
-    ShowEditor = 1200
+    ShowEditor = 1200,
+    CircleStyleMenu = 1300,
+    ArrowStyleMenu,
+    CheckStyleMenu,
+    LineStyleMenu,
+    StyleChoiceFirst = 1400
 };
 const std::array<Color, 8> Palette = {rgb(239, 68, 68),   rgb(249, 115, 22), rgb(250, 204, 21),
                                       rgb(34, 197, 94),   rgb(14, 165, 233), rgb(168, 85, 247),
@@ -76,7 +82,8 @@ struct Application
     Bitmap image, desktop, dimDesktop;
     Document document;
     Tool tool = Tool::Select;
-    std::array<Color, 5> colors = {Palette[0], Palette[0], Palette[0], Palette[0], Palette[3]};
+    std::array<Color, 6> colors = {Palette[0], Palette[0], Palette[0], Palette[0], Palette[3], Palette[0]};
+    std::array<uint8_t, 6> styles{};
     float thickness = 4, dpi = 1;
     View view;
     bool fit = true, dirty = false, capturePending = false, exiting = false, tray = false,
@@ -101,6 +108,7 @@ LRESULT CALLBACK overlayProcedure(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK settingsProcedure(HWND, UINT, WPARAM, LPARAM);
 void command(int id);
 void startSnip();
+void hideEditorForCapture();
 void repaint()
 {
     if (app.window)
@@ -111,7 +119,7 @@ void error(HWND owner, const char *text)
     int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
     std::wstring message(static_cast<size_t>(std::max(1, count)), 0);
     MultiByteToWideChar(CP_UTF8, 0, text, -1, message.data(), count);
-    MessageBoxW(owner, message.c_str(), L"Jack Snip", MB_OK | MB_ICONERROR);
+    MessageBoxW(owner, message.c_str(), L"Snipper", MB_OK | MB_ICONERROR);
 }
 void status(const std::wstring &text)
 {
@@ -253,7 +261,7 @@ void toggleStartup()
     RegCloseKey(key);
     if (result != ERROR_SUCCESS)
         throw std::runtime_error("Could not update the startup setting.");
-    status(enabled ? L"Run at sign-in disabled" : L"Jack Snip will start quietly at sign-in");
+    status(enabled ? L"Run at sign-in disabled" : L"Snipper will start quietly at sign-in");
 }
 void addTray()
 {
@@ -264,7 +272,7 @@ void addTray()
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = TrayMessage;
     data.hIcon = LoadIconW(app.instance, MAKEINTRESOURCEW(101));
-    wcscpy_s(data.szTip, L"Jack Snip - click to snip; right-click for menu");
+    wcscpy_s(data.szTip, L"Snipper - click to snip; right-click for menu");
     app.tray = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
 }
 void removeTray()
@@ -290,24 +298,82 @@ void showEditor()
 }
 void updateTitle()
 {
-    std::wstring title = L"Jack Snip";
+    std::wstring title = L"Snipper";
     if (hasImage())
         title += L"  |  " + std::to_wstring(app.image.width) + L" x " +
                  std::to_wstring(app.image.height) + (app.dirty ? L"  *" : L"");
     SetWindowTextW(app.window, title.c_str());
 }
-bool canDiscard()
+class CaptureDialogGuard
+{
+    HHOOK hook = nullptr;
+    static LRESULT CALLBACK prepareDialog(int code, WPARAM wp, LPARAM lp)
+    {
+        if (code == HCBT_ACTIVATE || code == HCBT_DESTROYWND)
+        {
+            HWND window = reinterpret_cast<HWND>(wp);
+            wchar_t name[80]{};
+            GetClassNameW(window, name, 80);
+            if (wcscmp(name, L"#32770") == 0)
+            {
+                const BOOL disabled = TRUE;
+                DwmSetWindowAttribute(window, DWMWA_TRANSITIONS_FORCEDISABLED, &disabled,
+                                      sizeof(disabled));
+                // Also remove the dialog's compositor surface before destruction so
+                // an immediately following capture cannot sample its closing animation.
+                if (code == HCBT_DESTROYWND)
+                    DwmSetWindowAttribute(window, DWMWA_CLOAK, &disabled, sizeof(disabled));
+            }
+        }
+        return CallNextHookEx(nullptr, code, wp, lp);
+    }
+
+  public:
+    explicit CaptureDialogGuard(bool enabled)
+    {
+        if (enabled)
+        {
+            hook = SetWindowsHookExW(WH_CBT, prepareDialog, nullptr, GetCurrentThreadId());
+            if (!hook)
+                throw std::runtime_error("Cannot prepare save dialogs for capture.");
+        }
+    }
+    ~CaptureDialogGuard()
+    {
+        if (hook)
+            UnhookWindowsHookEx(hook);
+    }
+    CaptureDialogGuard(const CaptureDialogGuard &) = delete;
+    CaptureDialogGuard &operator=(const CaptureDialogGuard &) = delete;
+};
+bool canDiscard(bool takingSnip = false)
 {
     if (!app.dirty)
         return true;
-    int result =
-        MessageBoxW(app.window, L"Save your annotations before replacing or closing this snip?",
-                    L"Jack Snip", MB_YESNOCANCEL | MB_ICONQUESTION);
+    CaptureDialogGuard dialogs(takingSnip);
+    const wchar_t *question = takingSnip ? L"Save changes before taking a new snip?"
+                                         : L"Save changes before closing Snipper?";
+    const int result = MessageBoxW(app.window, question, L"Snipper", MB_YESNOCANCEL | MB_ICONQUESTION);
     if (result == IDCANCEL)
+    {
+        if (takingSnip)
+            showEditor();
         return false;
+    }
     if (result == IDNO)
         return true;
-    command(Save);
+    try
+    {
+        command(Save);
+    }
+    catch (...)
+    {
+        if (takingSnip)
+            showEditor();
+        throw;
+    }
+    if (app.dirty && takingSnip)
+        showEditor();
     return !app.dirty;
 }
 void releaseImage()
@@ -344,7 +410,7 @@ Point limited(Point p)
 }
 std::vector<Point> handles(const Annotation &item)
 {
-    if (item.kind == Tool::Arrow)
+    if (item.kind == Tool::Arrow || item.kind == Tool::Line)
         return {item.a, item.b};
     auto r = item.bounds();
     return {{r.left, r.top}, {r.right, r.top}, {r.right, r.bottom}, {r.left, r.bottom}};
@@ -357,15 +423,20 @@ void buildButtons()
         app.buttons.push_back({{x, y, x + width, y + 32}, id, text});
         x += width + 6;
     };
+    auto addStyleTool = [&](int id, const wchar_t *text, float width, int menu) {
+        add(id, text, width - 22);
+        add(menu, L"\u25BE", 18);
+    };
     add(NewSnip, L"+  Snip", 82);
     add(Copy, L"Copy", 64);
     add(Save, L"Save", 64);
     x += 10;
     add(SelectTool, L"Select", 66);
     add(PenTool, L"Pen", 55);
-    add(CircleTool, L"Circle", 84);
-    add(ArrowTool, L"Arrow", 86);
-    add(CheckTool, L"Check", 86);
+    addStyleTool(CircleTool, L"Circle", 96, CircleStyleMenu);
+    addStyleTool(ArrowTool, L"Arrow", 96, ArrowStyleMenu);
+    addStyleTool(CheckTool, L"Check", 96, CheckStyleMenu);
+    addStyleTool(LineTool, L"Line", 88, LineStyleMenu);
     x = 54;
     for (int i = 0; i < 8; ++i)
     {
@@ -386,13 +457,14 @@ bool enabled(int id)
     if (id == NewSnip)
         return !app.capturePending && !app.overlay;
     if (id == Copy || id == Save || id == SaveAs || id == Fit || id == Actual ||
-        (id >= SelectTool && id <= CheckTool))
+        (id >= SelectTool && id <= LineTool) ||
+        (id >= CircleStyleMenu && id <= LineStyleMenu))
         return hasImage();
     return true;
 }
 bool active(int id)
 {
-    return id >= SelectTool && id <= CheckTool && static_cast<int>(app.tool) == id - SelectTool;
+    return id >= SelectTool && id <= LineTool && static_cast<int>(app.tool) == id - SelectTool;
 }
 void ensureTarget()
 {
@@ -441,7 +513,12 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     for (const auto &button : app.buttons)
     {
         auto r = button.rect;
-        bool on = active(button.command), over = app.hover == button.command,
+        bool on = active(button.command) ||
+                  (button.command == CircleStyleMenu && app.tool == Tool::Circle) ||
+                  (button.command == ArrowStyleMenu && app.tool == Tool::Arrow) ||
+                  (button.command == CheckStyleMenu && app.tool == Tool::Check) ||
+                  (button.command == LineStyleMenu && app.tool == Tool::Line),
+             over = app.hover == button.command,
              available = enabled(button.command);
         if (button.command >= ColorFirst && button.command < ColorFirst + 8)
         {
@@ -472,15 +549,16 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                        ? rgb(160, 168, 180)
                        : (button.command == NewSnip ? rgb(255, 255, 255)
                                                     : (on ? rgb(29, 78, 216) : rgb(51, 65, 85)));
-        if (button.command >= CircleTool && button.command <= CheckTool)
+        if (button.command >= CircleTool && button.command <= LineTool)
         {
             Annotation icon;
             icon.kind = static_cast<Tool>(button.command - SelectTool);
             icon.color = button.command == CheckTool && available ? Palette[3] : fg;
             icon.thickness = 1.7f;
+            icon.style = app.styles[static_cast<size_t>(icon.kind)];
             icon.a = {r.left + 10, r.top + 8};
             icon.b = {r.left + 26, r.top + 24};
-            if (icon.kind == Tool::Arrow)
+            if (icon.kind == Tool::Arrow || icon.kind == Tool::Line)
             {
                 icon.a.y = r.top + 23;
                 icon.b.y = r.top + 9;
@@ -534,14 +612,14 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         app.graphics.drawAnnotations(rt, app.document.items);
         rt->PopAxisAlignedClip();
         rt->SetTransform(D2D1::Matrix3x2F::Identity());
-        if (selected())
+        if (selected() && app.drag != Drag::Draw)
         {
             const auto &item = app.document.items[app.document.selected];
             auto box = item.bounds();
             auto a = app.view.toScreen({box.left, box.top}),
                  b = app.view.toScreen({box.right, box.bottom});
             brush->SetColor(color(rgb(37, 99, 235), .7f));
-            if (item.kind != Tool::Arrow)
+            if (item.kind != Tool::Arrow && item.kind != Tool::Line)
                 rt->DrawRectangle({a.x, a.y, b.x, b.y}, brush.get(), 1);
             for (auto p : handles(item))
             {
@@ -578,7 +656,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                 L"Select: drag to move; corner handles resize; Delete removes",
                 L"Pen: drag to draw; Ctrl+Z undoes", L"Circle: drag to draw; Shift makes a circle",
                 L"Arrow: drag to draw; select and drag endpoints to turn",
-                L"Check: click to place; drag to size"};
+                L"Check: click to place; drag to size",
+                L"Line: drag to draw; Shift snaps angle; drag endpoints to resize"};
             message = hints[static_cast<int>(app.tool)];
         }
         else
@@ -691,7 +770,14 @@ void finishDrag(bool cancel = false)
     if (app.document.editing())
     {
         if (cancel || !app.changed)
+        {
+            const int selection = app.document.selected;
+            const bool keepSelection = app.drag != Drag::Draw && selection >= 0 &&
+                                       static_cast<size_t>(selection) < app.document.items.size();
             app.document.cancel();
+            if (keepSelection && static_cast<size_t>(selection) < app.document.items.size())
+                app.document.selected = selection;
+        }
         else
         {
             app.document.commit();
@@ -745,7 +831,8 @@ void mouseDown(LPARAM lp, bool middle = false)
                     app.handle = static_cast<int>(i);
                     app.before = app.document.items[app.document.selected];
                     app.document.begin();
-                    app.drag = app.before.kind == Tool::Arrow ? Drag::Endpoint : Drag::Resize;
+                    app.drag = app.before.kind == Tool::Arrow || app.before.kind == Tool::Line
+                                   ? Drag::Endpoint : Drag::Resize;
                     SetCapture(app.window);
                     return;
                 }
@@ -769,6 +856,7 @@ void mouseDown(LPARAM lp, bool middle = false)
     item.kind = app.tool;
     item.color = app.colors[static_cast<size_t>(app.tool)];
     item.thickness = app.thickness;
+    item.style = app.styles[static_cast<size_t>(app.tool)];
     item.a = item.b = p;
     if (app.tool == Tool::Pen)
         item.points.push_back(p);
@@ -817,6 +905,13 @@ void mouseMove(LPARAM lp)
         {
             if (length(p - item.points.back()) >= .6f)
                 item.points.push_back(p);
+        }
+        else if (app.tool == Tool::Line && (GetKeyState(VK_SHIFT) & 0x8000))
+        {
+            Point delta = p - app.dragStart;
+            constexpr float step = 3.14159265f / 4;
+            float angle = std::round(std::atan2(delta.y, delta.x) / step) * step;
+            item.b = limited(app.dragStart + Point{std::cos(angle), std::sin(angle)} * length(delta));
         }
         else if (app.tool == Tool::Circle && (GetKeyState(VK_SHIFT) & 0x8000))
         {
@@ -878,8 +973,10 @@ void mouseUp()
                 {size, static_cast<float>(app.image.width), static_cast<float>(app.image.height)});
             Point a{std::clamp(item.a.x - size / 2, 0.0f, app.image.width - size),
                     std::clamp(item.a.y - size / 2, 0.0f, app.image.height - size)};
+            if (item.kind == Tool::Line)
+                a.y = item.a.y;
             item.a = a;
-            item.b = a + Point{size, size};
+            item.b = a + Point{size, item.kind == Tool::Line ? 0.0f : size};
         }
         // Shape tools switch to selection after placement so moving the new object takes one drag.
         if (item.kind != Tool::Pen)
@@ -928,7 +1025,7 @@ bool chooseSave(std::wstring &path)
     }
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = app.window;
+    dialog.hwndOwner = IsWindowVisible(app.window) ? app.window : nullptr;
     dialog.lpstrFilter = L"PNG image (*.png)\0*.png\0\0";
     dialog.lpstrFile = buffer;
     dialog.nMaxFile = 32768;
@@ -946,7 +1043,8 @@ bool chooseSave(std::wstring &path)
         path += L".png";
     else if (_wcsicmp(path.substr(dot).c_str(), L".png") != 0)
     {
-        MessageBoxW(app.window, L"Jack Snip saves PNG images. Use a filename ending in .png.",
+        MessageBoxW(IsWindowVisible(app.window) ? app.window : nullptr,
+                    L"Snipper saves PNG images. Use a filename ending in .png.",
                     L"Save as PNG", MB_OK | MB_ICONINFORMATION);
         return chooseSave(path);
     }
@@ -1008,7 +1106,7 @@ void trayMenu()
     AppendMenuW(menu, MF_STRING, ShowEditor, L"Open editor");
     AppendMenuW(menu, MF_STRING, Settings, L"Keyboard shortcut...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, Exit, L"Exit Jack Snip");
+    AppendMenuW(menu, MF_STRING, Exit, L"Exit Snipper");
     POINT point{};
     GetCursorPos(&point);
     SetForegroundWindow(app.window);
@@ -1028,10 +1126,49 @@ void command(int id)
         changeColor(Palette[id - ColorFirst]);
         return;
     }
-    if (id >= SelectTool && id <= CheckTool)
+    if (id >= SelectTool && id <= LineTool)
     {
         if (hasImage())
             selectTool(static_cast<Tool>(id - SelectTool));
+        return;
+    }
+    if (id >= CircleStyleMenu && id <= LineStyleMenu)
+    {
+        if (!hasImage())
+            return;
+        const int toolOffset = id - CircleStyleMenu;
+        const Tool tool = static_cast<Tool>(static_cast<int>(Tool::Circle) + toolOffset);
+        const wchar_t *const labels[][3] = {
+            {L"Outline", L"Soft highlight", L"Dashed outline"},
+            {L"Classic", L"Outlined", L"Curved gloss"},
+            {L"Boxed", L"Circle badge", L"Simple check"},
+            {L"Solid", L"Dashed", L"Dotted"}};
+        HMENU menu = CreatePopupMenu();
+        if (!menu)
+            return;
+        const size_t toolIndex = static_cast<size_t>(tool);
+        const int base = StyleChoiceFirst + (static_cast<int>(toolIndex) -
+                                             static_cast<int>(Tool::Circle)) * 3;
+        for (int style = 0; style < 3; ++style)
+            AppendMenuW(menu, MF_STRING | (app.styles[toolIndex] == style ? MF_CHECKED : 0),
+                        base + style, labels[toolOffset][style]);
+        POINT point{};
+        GetCursorPos(&point);
+        SetForegroundWindow(app.window);
+        const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y,
+                                          0, app.window, nullptr);
+        DestroyMenu(menu);
+        PostMessageW(app.window, WM_NULL, 0, 0);
+        if (choice)
+            command(choice);
+        return;
+    }
+    if (id >= StyleChoiceFirst && id < StyleChoiceFirst + 12)
+    {
+        const int option = id - StyleChoiceFirst;
+        const Tool tool = static_cast<Tool>(static_cast<int>(Tool::Circle) + option / 3);
+        app.styles[static_cast<size_t>(tool)] = static_cast<uint8_t>(option % 3);
+        selectTool(tool);
         return;
     }
     switch (id)
@@ -1125,14 +1262,14 @@ void command(int id)
     case About:
         MessageBoxW(
             app.window,
-            L"Jack Snip 1.0.1\n\nNative C++ screenshot editor.\n\nCtrl+N: new snip\nCtrl+C: "
+            L"Snipper 1.0.1\n\nNative C++ screenshot editor.\n\nCtrl+N: new snip\nCtrl+C: "
             L"copy image with annotations\nCtrl+S: save PNG\nCtrl+Shift+S: Save As\nCtrl+Z "
-            L"/ Ctrl+Y: undo / redo\nV / P / O / A / K: select / pen / circle / arrow / "
-            L"check\n[ / ]: brush size\nDelete: remove selection\nCtrl+wheel: "
+            L"/ Ctrl+Y: undo / redo\nV / P / O / A / K / L: select / pen / circle / arrow / "
+            L"check / line\n[ / ]: brush size\nDelete: remove selection\nCtrl+wheel: "
             L"zoom\nMiddle-drag or Space+drag: pan\nEsc: cancel capture or current "
             L"edit\n\nClose the window to stay in the tray.\nFile > Exit quits "
             L"completely.\n\nShortcut settings are saved beside the executable.",
-            L"About Jack Snip", MB_OK | MB_ICONINFORMATION);
+            L"About Snipper", MB_OK | MB_ICONINFORMATION);
         break;
     case Exit:
         if (canDiscard())
@@ -1183,11 +1320,26 @@ void startSnip()
 {
     if (app.overlay || app.capturePending || app.settingsWindow)
         return;
-    if (!canDiscard())
-        return;
+    // Modal dialogs pump hotkeys too. Reserve the request before opening one,
+    // so another rapid snip cannot start capture with an earlier dialog still open.
     app.capturePending = true;
-    hideEditorForCapture();
-    SetTimer(app.window, CaptureTimer, 65, nullptr);
+    try
+    {
+        if (!canDiscard(true))
+        {
+            app.capturePending = false;
+            repaint();
+            return;
+        }
+        hideEditorForCapture();
+        if (!SetTimer(app.window, CaptureTimer, 65, nullptr))
+            throw std::runtime_error("Cannot start screen capture.");
+    }
+    catch (...)
+    {
+        cancelCapture();
+        throw;
+    }
 }
 void openOverlay()
 {
@@ -1206,7 +1358,7 @@ void openOverlay()
                 static_cast<uint8_t>(app.dimDesktop.pixels[i + c] * .48f);
     app.selecting = false;
     app.overlay = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, OverlayClass,
-                                  L"Jack Snip selection", WS_POPUP, app.virtualX, app.virtualY,
+                                  L"Snipper selection", WS_POPUP, app.virtualX, app.virtualY,
                                   width, height, nullptr, nullptr, app.instance, nullptr);
     if (!app.overlay)
         throw std::runtime_error("Cannot open the selection overlay.");
@@ -1442,6 +1594,9 @@ void processKey(WPARAM key)
     case 'K':
         command(CheckTool);
         break;
+    case 'L':
+        command(LineTool);
+        break;
     case VK_OEM_4:
         command(SizeDown);
         break;
@@ -1509,7 +1664,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_GETMINMAXINFO: {
         auto info = reinterpret_cast<MINMAXINFO *>(lp);
         float d = dpiFor(hwnd);
-        info->ptMinTrackSize = {static_cast<LONG>(730 * d), static_cast<LONG>(360 * d)};
+        info->ptMinTrackSize = {static_cast<LONG>(850 * d), static_cast<LONG>(360 * d)};
         return 0;
     }
     case WM_COMMAND:
@@ -1828,6 +1983,74 @@ void writeTestReport(const wchar_t *filename, const std::string &content)
     std::ofstream file(filename, std::ios::binary);
     file << content;
 }
+class SmokePromptAction
+{
+    static inline SmokePromptAction *current = nullptr;
+    UINT_PTR timer = 0;
+    int decision;
+    HWND observed = nullptr;
+    bool repeatRequested = false;
+    static BOOL CALLBACK findPrompt(HWND window, LPARAM data)
+    {
+        auto &action = *reinterpret_cast<SmokePromptAction *>(data);
+        wchar_t name[80]{}, title[80]{};
+        GetClassNameW(window, name, 80);
+        GetWindowTextW(window, title, 80);
+        if (wcscmp(name, L"#32770") != 0 || wcscmp(title, L"Snipper") != 0 ||
+            !IsWindowVisible(window) || !GetDlgItem(window, action.decision))
+            return TRUE;
+        if (!action.observed)
+        {
+            action.observed = window;
+            action.shown = true;
+            DWORD cloaked = 0;
+            DwmGetWindowAttribute(app.window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+            action.editorVisible = IsWindowVisible(app.window) && !cloaked;
+            action.promptOwned = GetWindow(window, GW_OWNER) == app.window;
+            action.captureBlocked = app.capturePending;
+            GetWindowRect(window, &action.bounds);
+        }
+        else if (action.observed != window)
+            action.extraPrompt = true;
+        if (action.captureBlocked && !action.repeatRequested)
+        {
+            action.repeatRequested = true;
+            SendMessageW(app.window, WM_HOTKEY, app.hotkeyId, 0);
+            action.repeatIgnored = !action.extraPrompt && app.capturePending && !app.overlay &&
+                                   IsWindowVisible(window);
+        }
+        DwmFlush();
+        KillTimer(nullptr, action.timer);
+        PostMessageW(window, WM_COMMAND, action.decision, 0);
+        return FALSE;
+    }
+    static void CALLBACK dismiss(HWND, UINT, UINT_PTR, DWORD)
+    {
+        if (current)
+            EnumThreadWindows(GetCurrentThreadId(), findPrompt,
+                              reinterpret_cast<LPARAM>(current));
+    }
+
+  public:
+    bool shown = false, editorVisible = false, promptOwned = false, captureBlocked = false, repeatIgnored = false,
+         extraPrompt = false;
+    RECT bounds{};
+    explicit SmokePromptAction(int response) : decision(response)
+    {
+        current = this;
+        timer = SetTimer(nullptr, 0, 120, dismiss);
+        if (!timer)
+        {
+            current = nullptr;
+            throw std::runtime_error("Cannot automate the capture confirmation regression.");
+        }
+    }
+    ~SmokePromptAction()
+    {
+        KillTimer(nullptr, timer);
+        current = nullptr;
+    }
+};
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
@@ -1864,7 +2087,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             app.graphics.test();
             writeTestReport(L"self-test-results.txt",
                             "PASS: model history, cancellation, hit testing, resizing, coordinate "
-                            "transforms, cropping, pen/circle/arrow/check composition, PNG "
+                            "transforms, cropping, pen/circle/arrow/check composition, "
+                            "solid/dashed/dotted line patterns, outlined/curved arrow artwork and selection, PNG "
                             "pixel-perfect round trip, moved annotations.\n");
         }
         else
@@ -1907,13 +2131,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                                  static_cast<int>(work.right - work.left)),
                 height =
                     std::min(static_cast<int>(740 * dpi), static_cast<int>(work.bottom - work.top));
-            HWND window = CreateWindowExW(0, MainClass, L"Jack Snip", WS_OVERLAPPEDWINDOW,
+            HWND window = CreateWindowExW(0, MainClass, L"Snipper", WS_OVERLAPPEDWINDOW,
                                           work.left + (work.right - work.left - width) / 2,
                                           work.top + (work.bottom - work.top - height) / 2, width,
                                           height, nullptr, createMenu(), instance, nullptr);
             if (!window)
                 throw std::runtime_error("Cannot create the editor window.");
-            WORD initial = app.hotkey;
+            // The smoke process must not compete with the user's running global shortcut.
+            WORD initial = app.smoke ? 0 : app.hotkey;
             app.hotkey = 0;
             if (!registerShortcut(initial))
                 status(L"Shortcut unavailable - change it in Settings");
@@ -1954,13 +2179,50 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                                                             editorBounds.bottom - editorBounds.top);
                 SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                app.image = Bitmap::create(640, 360);
+                std::fill(app.image.pixels.begin(), app.image.pixels.end(), 255);
+                Annotation unsaved;
+                unsaved.points = {{20, 20}, {180, 80}};
+                app.document.items.push_back(unsaved);
+                app.dirty = true;
+                {
+                    SmokePromptAction cancel(IDCANCEL);
+                    command(NewSnip);
+                    DWORD cloaked = 0;
+                    DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+                    if (!cancel.captureBlocked || !cancel.repeatIgnored)
+                        throw std::runtime_error("Repeated snips are not blocked during confirmation.");
+                    if (!cancel.shown || !cancel.editorVisible || !cancel.promptOwned || !IsWindowVisible(window) ||
+                        cloaked || app.capturePending || app.overlay || !app.dirty ||
+                        app.document.items.size() != 1)
+                        throw std::runtime_error("Canceling the new-snip prompt lost the editor.");
+                }
                 UpdateWindow(window);
+                SmokePromptAction discard(IDNO);
                 command(NewSnip);
+                if (!discard.captureBlocked || !discard.repeatIgnored)
+                    throw std::runtime_error("Repeated snips are not blocked during confirmation.");
+                if (!discard.shown || !discard.editorVisible || !discard.promptOwned)
+                    throw std::runtime_error("Capture confirmation did not stay over the editor.");
                 if (IsWindowVisible(window) || !app.capturePending)
                     throw std::runtime_error("Snip did not immediately hide the editor.");
                 SendMessageW(window, WM_TIMER, CaptureTimer, 0);
                 if (!app.overlay)
                     throw std::runtime_error("Snip did not create its selection overlay.");
+                RECT dialogBounds = discard.bounds;
+                InflateRect(&dialogBounds, 16, 16);
+                if (dialogBounds.left < editorBounds.left || dialogBounds.top < editorBounds.top ||
+                    dialogBounds.right > editorBounds.right ||
+                    dialogBounds.bottom > editorBounds.bottom)
+                    throw std::runtime_error("Capture confirmation fell outside its test backing.");
+                auto dialogCapture = app.desktop.crop(
+                    dialogBounds.left - app.virtualX, dialogBounds.top - app.virtualY,
+                    dialogBounds.right - dialogBounds.left, dialogBounds.bottom - dialogBounds.top);
+                auto dialogReference = backingPixels.crop(
+                    dialogBounds.left - editorBounds.left, dialogBounds.top - editorBounds.top,
+                    dialogBounds.right - dialogBounds.left, dialogBounds.bottom - dialogBounds.top);
+                if (dialogCapture.pixels != dialogReference.pixels)
+                    throw std::runtime_error("Save confirmation or its fade leaked into capture.");
                 // Compare against the surface as actually presented. The STATIC
                 // rectangle's shade depends on the current Windows theme.
                 for (float fraction : {.25f, .5f, .75f})
@@ -2077,6 +2339,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 command(Undo);
                 if (app.document.items.size() != 4)
                     throw std::runtime_error("Undo deletion failed.");
+                for (int style = 0; style < 3; ++style)
+                {
+                    command(StyleChoiceFirst + 9 + style);
+                    float y = 300.0f + style * 16;
+                    dragImage({20, y}, {220, y});
+                    dragImage({220, y}, {240, y});
+                    const auto &line = app.document.items.back();
+                    if (line.kind != Tool::Line || line.style != style ||
+                        length(line.b - Point{240, y}) > 2 || !line.hit({130, y}, 1))
+                        throw std::runtime_error("Line style, selection, or endpoint editing failed.");
+                }
+                for (int style = 1; style <= 2; ++style)
+                {
+                    command(StyleChoiceFirst + 3 + style);
+                    dragImage({400, 220}, {550, 290});
+                    const auto &arrow = app.document.items.back();
+                    if (arrow.kind != Tool::Arrow || arrow.style != style ||
+                        !arrow.hit(arrow.arrowSpine(.5f), 0))
+                        throw std::runtime_error("Outlined or curved arrow placement/selection failed.");
+                }
                 auto flattened = app.graphics.flatten(app.image, app.document.items);
                 saveBytes(L"smoke-test-export.png", app.graphics.png(flattened));
                 UpdateWindow(window);
@@ -2099,10 +2381,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 app.iniPath = originalIni;
                 writeTestReport(
                     L"smoke-test-results.txt",
-                    "PASS: no editor/fade pixels in capture, restored editor with Pen selected, "
+                    "PASS: real unsaved-snip Cancel/No dialogs owned over the visible editor, "
+                    "editor restoration after Cancel, "
+                    "repeated hotkeys blocked while confirmation is open, "
+                    "immediate capture with no confirmation dialog/fade pixels, "
+                    "no editor/fade pixels in capture, restored editor with Pen selected, "
                     "native window, Direct2D editor, live desktop capture, selection overlay "
                     "original pixels, mouse rectangle selection and cropping, mouse drawing, all "
-                    "stickers, move/resize/recolor, arrow endpoint rotation, delete, undo/redo, "
+                    "stickers, solid/dashed/dotted lines and endpoint editing, outlined/curved arrows, "
+                    "move/resize/recolor, arrow endpoint rotation, delete, undo/redo, "
                     "annotated PNG export, settings dialog and persistence.\n");
                 SetTimer(window, SmokeTimer, 1000, nullptr);
             }
@@ -2133,6 +2420,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     app.displayBitmap.reset();
     app.target.reset();
     app.graphics.roundStroke.reset();
+    app.graphics.dashStroke.reset();
+    app.graphics.dotStroke.reset();
     app.graphics.titleFont.reset();
     app.graphics.smallFont.reset();
     app.graphics.font.reset();

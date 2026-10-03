@@ -1,5 +1,5 @@
 #include <windows.h>
-101 ICON "jack-snip.ico"
+101 ICON "snipper.ico"
 1 RT_MANIFEST "app.manifest"
 1 VERSIONINFO
  FILEVERSION 1,0,1,0
@@ -11,10 +11,10 @@ BEGIN
  BEGIN
   BLOCK "040904b0"
   BEGIN
-   VALUE "FileDescription", "Jack Snip - native screenshot editor\0"
-   VALUE "ProductName", "Jack Snip\0"
+   VALUE "FileDescription", "Snipper - native screenshot editor\0"
+   VALUE "ProductName", "Snipper\0"
    VALUE "FileVersion", "1.0.1\0"
-   VALUE "OriginalFilename", "JackSnip.exe\0"
+   VALUE "OriginalFilename", "Snipper.exe\0"
   END
  END
  BLOCK "VarFileInfo"

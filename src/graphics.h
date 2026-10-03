@@ -53,7 +53,7 @@ class Graphics
     Com<ID2D1Factory> factory;
     Com<IDWriteFactory> textFactory;
     Com<IDWriteTextFormat> font, smallFont, titleFont;
-    Com<ID2D1StrokeStyle> roundStroke;
+    Com<ID2D1StrokeStyle> roundStroke, dashStroke, dotStroke;
     void initialize();
     void drawAnnotations(ID2D1RenderTarget *target, const std::vector<Annotation> &items);
     Bitmap flatten(const Bitmap &image, const std::vector<Annotation> &items);

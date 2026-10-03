@@ -1,6 +1,6 @@
-JACK SNIP 1.0.1
+SNIPPER 1.0.1
 
-Double-click JackSnip.exe. No installation required.
+Double-click Snipper.exe. No installation required.
 
 Click Snip, drag an area, and release. Pen is selected automatically.
 Ctrl+C copies the image with all annotations. Capturing never automatically copies.
@@ -8,8 +8,11 @@ Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 
 Pen: draw with different widths and colors.
 Circle/Arrow: drag to create; choose a color.
+Use the small arrow beside Circle, Arrow, Check, and Line to choose from three styles.
+Arrows: classic, outlined with a black border, or curved with a glossy highlight.
+Line: solid, dashed, or dotted. Hold Shift to snap its angle; L selects Line.
 Check: click to place a green boxed check or drag to size it.
-Select: move stickers; drag corners to resize, or arrow endpoints to turn.
+Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
 
 Settings > Keyboard shortcut changes the global snipping shortcut.

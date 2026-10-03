@@ -1,4 +1,4 @@
-param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'JackSnip.exe')
+param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'Snipper.exe')
 $ErrorActionPreference = 'Stop'
 if ($OutputName -notmatch '^[A-Za-z0-9._-]+\.exe$') { throw 'OutputName must be an executable filename.' }
 $taskRoot = $PSScriptRoot
@@ -15,7 +15,7 @@ $taskResourceCompiler = Join-Path $CompilerDirectory 'llvm-windres.exe'
 $taskBuild = Join-Path $taskRoot 'build'
 $taskDist = Join-Path $taskRoot 'dist'
 New-Item -ItemType Directory -Force -Path $taskBuild, $taskDist | Out-Null
-$taskIcon = Join-Path $taskRoot 'resources\jack-snip.ico'
+$taskIcon = Join-Path $taskRoot 'resources\snipper.ico'
 if (-not (Test-Path -LiteralPath $taskIcon)) { & (Join-Path $taskRoot 'scripts\make-icon.ps1') }
 Push-Location (Join-Path $taskRoot 'resources')
 try {

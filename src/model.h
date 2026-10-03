@@ -48,7 +48,8 @@ enum class Tool
     Pen,
     Circle,
     Arrow,
-    Check
+    Check,
+    Line
 };
 using Color = uint32_t;
 constexpr Color rgb(unsigned r, unsigned g, unsigned b)
@@ -60,8 +61,11 @@ struct Annotation
     Tool kind = Tool::Pen;
     Color color = rgb(239, 68, 68);
     float thickness = 4;
+    uint8_t style = 0;
     Point a, b;
     std::vector<Point> points;
+    Point arrowSpine(float fraction) const;
+    std::vector<Point> arrowContour() const;
     Rect bounds() const;
     void move(Point delta);
     void resize(Rect from, Rect to);

@@ -39,6 +39,14 @@ void Graphics::initialize()
                                           D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND),
               nullptr, 0, roundStroke.put()),
           "Cannot initialize brush strokes.");
+    auto dashed = D2D1::StrokeStyleProperties(
+        D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+        D2D1_LINE_JOIN_ROUND, 10.0f, D2D1_DASH_STYLE_DASH);
+    check(factory->CreateStrokeStyle(dashed, nullptr, 0, dashStroke.put()),
+          "Cannot initialize dashed strokes.");
+    dashed.dashStyle = D2D1_DASH_STYLE_DOT;
+    check(factory->CreateStrokeStyle(dashed, nullptr, 0, dotStroke.put()),
+          "Cannot initialize dotted strokes.");
 }
 void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotation> &items)
 {
@@ -50,8 +58,9 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
         brush->SetColor(color(item.color));
         float width = item.thickness;
         auto r = item.bounds();
-        auto line = [&](Point a, Point b, float w) {
-            rt->DrawLine({a.x, a.y}, {b.x, b.y}, brush.get(), w, roundStroke.get());
+        auto line = [&](Point a, Point b, float w, ID2D1StrokeStyle *stroke = nullptr) {
+            rt->DrawLine({a.x, a.y}, {b.x, b.y}, brush.get(), w,
+                         stroke ? stroke : roundStroke.get());
         };
         switch (item.kind)
         {
@@ -75,33 +84,88 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             }
             break;
         case Tool::Circle:
-            rt->DrawEllipse(D2D1::Ellipse({(r.left + r.right) / 2, (r.top + r.bottom) / 2},
-                                          r.width() / 2, r.height() / 2),
-                            brush.get(), width, roundStroke.get());
+        {
+            auto ellipse = D2D1::Ellipse({(r.left + r.right) / 2, (r.top + r.bottom) / 2},
+                                         r.width() / 2, r.height() / 2);
+            if (item.style == 1)
+            {
+                brush->SetColor(color(item.color, .18f));
+                rt->FillEllipse(ellipse, brush.get());
+                brush->SetColor(color(item.color));
+                rt->DrawEllipse(ellipse, brush.get(), width * 1.2f, roundStroke.get());
+            }
+            else
+                rt->DrawEllipse(ellipse, brush.get(), width,
+                                item.style == 2 ? dashStroke.get() : roundStroke.get());
             break;
+        }
         case Tool::Arrow: {
-            line(item.a, item.b, width);
             Point v = item.b - item.a;
             float len = length(v);
-            if (len > .01f)
+            if (item.style != 0 && len > .01f)
             {
-                Point u = v * (1 / len), n{-u.y, u.x};
-                float head = std::min(len * .45f, std::max(12.0f, width * 3));
-                line(item.b, item.b - u * head + n * (head * .5f), width);
-                line(item.b, item.b - u * head - n * (head * .5f), width);
+                auto outline = item.arrowContour();
+                Com<ID2D1PathGeometry> path;
+                Com<ID2D1GeometrySink> sink;
+                check(factory->CreatePathGeometry(path.put()), "Cannot create arrow geometry.");
+                check(path->Open(sink.put()), "Cannot draw arrow geometry.");
+                sink->BeginFigure({outline[0].x, outline[0].y}, D2D1_FIGURE_BEGIN_FILLED);
+                for (size_t i = 1; i < outline.size(); ++i)
+                    sink->AddLine({outline[i].x, outline[i].y});
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                check(sink->Close(), "Cannot finish arrow geometry.");
+                rt->FillGeometry(path.get(), brush.get());
+                brush->SetColor(color(rgb(12, 12, 16)));
+                rt->DrawGeometry(path.get(), brush.get(), std::min(len * .06f, std::max(1.2f, width * .45f)),
+                                 roundStroke.get());
+                if (item.style == 2)
+                {
+                    const Color c = item.color;
+                    brush->SetColor(color(rgb((c & 255) / 2 + 127, ((c >> 8) & 255) / 2 + 127,
+                                             ((c >> 16) & 255) / 2 + 127), .85f));
+                    Point previous = item.arrowSpine(.22f);
+                    float end = std::clamp(1 - std::min(len * .45f,
+                        std::max({22.0f, width * 6, len * .18f})) / len, .55f, .84f) * .88f;
+                    for (int i = 1; i <= 32; ++i)
+                    {
+                        Point next = item.arrowSpine(.22f + (end - .22f) * i / 32.0f);
+                        line(previous, next, std::min(len * .012f, std::max(1.0f, width * .5f)));
+                        previous = next;
+                    }
+                }
+            }
+            else
+            {
+                line(item.a, item.b, width);
+                if (len > .01f)
+                {
+                    Point u = v * (1 / len), n{-u.y, u.x};
+                    float head = std::min(len * .45f, std::max(12.0f, width * 3));
+                    line(item.b, item.b - u * head + n * (head * .5f), width);
+                    line(item.b, item.b - u * head - n * (head * .5f), width);
+                }
             }
             break;
         }
+        case Tool::Line:
+            line(item.a, item.b, width,
+                 item.style == 1 ? dashStroke.get() : item.style == 2 ? dotStroke.get() : nullptr);
+            break;
         case Tool::Check: {
             float w = r.width(), h = r.height(), stroke = std::max(1.0f, std::min(w, h) * .06f);
-            rt->DrawRoundedRectangle(
-                D2D1::RoundedRect(D2D1::RectF(r.left, r.top, r.right, r.bottom), w * .12f,
-                                  h * .12f),
-                brush.get(), stroke);
+            if (item.style == 0)
+                rt->DrawRoundedRectangle(
+                    D2D1::RoundedRect(D2D1::RectF(r.left, r.top, r.right, r.bottom), w * .12f,
+                                      h * .12f),
+                    brush.get(), stroke);
+            else if (item.style == 1)
+                rt->DrawEllipse(D2D1::Ellipse({(r.left + r.right) / 2, (r.top + r.bottom) / 2},
+                                              w * .48f, h * .48f),
+                                brush.get(), stroke);
             line({r.left + w * .23f, r.top + h * .52f}, {r.left + w * .43f, r.top + h * .72f},
-                 stroke * 1.4f);
+                 stroke * (item.style == 2 ? 1.8f : 1.4f));
             line({r.left + w * .43f, r.top + h * .72f}, {r.left + w * .79f, r.top + h * .28f},
-                 stroke * 1.4f);
+                 stroke * (item.style == 2 ? 1.8f : 1.4f));
             break;
         }
         default:
@@ -443,5 +507,65 @@ void Graphics::test()
     size_t old = (10 * 160 + 50) * 4, next = (30 * 160 + 50) * 4;
     if (moved.pixels[old] != 255 || moved.pixels[next] != 0 || moved.pixels[next + 2] != 255)
         throw std::runtime_error("Moved sticker export test failed.");
+    auto preview = Bitmap::create(960, 360);
+    std::fill(preview.pixels.begin(), preview.pixels.end(), 255);
+    std::vector<Annotation> samples;
+    for (int style = 0; style < 3; ++style)
+    {
+        Annotation sample;
+        sample.kind = Tool::Arrow;
+        sample.style = static_cast<uint8_t>(style);
+        sample.thickness = 6;
+        sample.color = rgb(239, 45, 45);
+        sample.a = {60.0f + style * 320, 100};
+        sample.b = {270.0f + style * 320, 100};
+        if (style == 2)
+        {
+            sample.a = {885, 40};
+            sample.b = {725, 190};
+        }
+        if (!sample.hit(sample.arrowSpine(.5f), 0) || sample.hit({0, 359}, 0))
+            throw std::runtime_error("Arrow artwork hit testing failed.");
+        samples.push_back(sample);
+        sample.kind = Tool::Line;
+        sample.color = rgb(37, 99, 235);
+        sample.a = {60.0f + style * 320, 285};
+        sample.b = {270.0f + style * 320, 285};
+        samples.push_back(sample);
+    }
+    auto rendered = flatten(preview, samples);
+    int runs[3]{};
+    for (int style = 0; style < 3; ++style)
+    {
+        bool previous = false;
+        for (int x = 50 + style * 320; x < 280 + style * 320; ++x)
+        {
+            size_t i = (static_cast<size_t>(285) * rendered.width + x) * 4;
+            bool blue = rendered.pixels[i] > 180 && rendered.pixels[i + 1] < 150 &&
+                        rendered.pixels[i + 2] < 100;
+            if (blue && !previous)
+                ++runs[style];
+            previous = blue;
+        }
+        if (style)
+        {
+            int black = 0, red = 0;
+            for (int y = 15; y < 225; ++y)
+                for (int x = style * 320; x < (style + 1) * 320; ++x)
+                {
+                    size_t i = (static_cast<size_t>(y) * rendered.width + x) * 4;
+                    if (rendered.pixels[i] < 40 && rendered.pixels[i + 1] < 40 &&
+                        rendered.pixels[i + 2] < 40)
+                        ++black;
+                    if (rendered.pixels[i + 2] > 180 && rendered.pixels[i] < 100)
+                        ++red;
+                }
+            if (black < 10 || red < 40)
+                throw std::runtime_error("Outlined arrow export lost its border or fill.");
+        }
+    }
+    if (runs[0] != 1 || runs[1] < 3 || runs[2] <= runs[1])
+        throw std::runtime_error("Solid/dashed/dotted line export patterns failed.");
+    saveBytes(L"annotation-style-preview.png", png(rendered));
 }
 } // namespace snip

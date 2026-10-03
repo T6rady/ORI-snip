@@ -11,8 +11,74 @@ float segmentDistance(Point p, Point a, Point b)
     float t = n > 0 ? std::clamp((w.x * v.x + w.y * v.y) / n, 0.0f, 1.0f) : 0;
     return length(p - (a + v * t));
 }
+Point Annotation::arrowSpine(float t) const
+{
+    Point v = b - a;
+    float len = length(v);
+    if (style != 2 || len < .01f)
+        return a + v * t;
+    Point n{-v.y / len, v.x / len};
+    return a + v * t - n * (len * 1.2f * t * (1 - t));
+}
+std::vector<Point> Annotation::arrowContour() const
+{
+    Point v = b - a;
+    float len = length(v);
+    if (len < .01f || kind != Tool::Arrow || style == 0)
+        return {};
+    Point u = v * (1 / len), n{-u.y, u.x};
+    float half = std::min(len * .09f, std::max(3.5f, thickness * 1.4f));
+    float head = std::min(len * .45f, std::max({22.0f, thickness * 6, len * .18f}));
+    if (style == 1)
+    {
+        Point base = b - u * head;
+        float headHalf = std::max(half * 2.5f, head * .55f);
+        return {a + n * half, base + n * half, base + n * headHalf, b,
+                base - n * headHalf, base - n * half, a - n * half};
+    }
+    half = std::min(len * .10f, std::max(thickness * 2.2f, len * .055f));
+    float baseT = std::clamp(1 - head / len, .55f, .84f);
+    Point base = arrowSpine(baseT), tipDirection = b - base;
+    tipDirection = tipDirection * (1 / length(tipDirection));
+    Point tipNormal{-tipDirection.y, tipDirection.x};
+    float headHalf = std::max(half * 2.1f, length(b - base) * .60f);
+    auto side = [&](int step, float sign) {
+        float fraction = step / 48.0f, t = baseT * fraction;
+        Point tangent = v - n * (len * 1.2f * (1 - 2 * t));
+        tangent = tangent * (1 / length(tangent));
+        Point normal{-tangent.y, tangent.x};
+        if (step == 48)
+            normal = tipNormal;
+        return arrowSpine(t) + normal * (sign * half * fraction);
+    };
+    std::vector<Point> outline{a};
+    for (int i = 1; i <= 48; ++i)
+        outline.push_back(side(i, 1));
+    outline.push_back(base + tipNormal * headHalf);
+    outline.push_back(b);
+    outline.push_back(base - tipNormal * headHalf);
+    for (int i = 48; i >= 1; --i)
+        outline.push_back(side(i, -1));
+    return outline;
+}
 Rect Annotation::bounds() const
 {
+    if (kind == Tool::Arrow && style != 0)
+    {
+        auto outline = arrowContour();
+        if (!outline.empty())
+        {
+            Rect r{outline[0].x, outline[0].y, outline[0].x, outline[0].y};
+            for (auto p : outline)
+            {
+                r.left = std::min(r.left, p.x);
+                r.top = std::min(r.top, p.y);
+                r.right = std::max(r.right, p.x);
+                r.bottom = std::max(r.bottom, p.y);
+            }
+            return r;
+        }
+    }
     if (kind != Tool::Pen || points.empty())
         return rectangle(a, b);
     Rect r{points[0].x, points[0].y, points[0].x, points[0].y};
@@ -58,6 +124,23 @@ bool Annotation::hit(Point p, float tol) const
                 return true;
         return false;
     }
+    if (kind == Tool::Line)
+        return segmentDistance(p, a, b) <= tol;
+    if (kind == Tool::Arrow && style != 0)
+    {
+        auto outline = arrowContour();
+        bool inside = false;
+        for (size_t i = 0; i < outline.size(); ++i)
+        {
+            Point x = outline[i], y = outline[(i + 1) % outline.size()];
+            if (segmentDistance(p, x, y) <= tol)
+                return true;
+            if ((x.y > p.y) != (y.y > p.y) &&
+                p.x < (y.x - x.x) * (p.y - x.y) / (y.y - x.y) + x.x)
+                inside = !inside;
+        }
+        return inside;
+    }
     if (kind == Tool::Arrow)
     {
         if (segmentDistance(p, a, b) <= tol)
@@ -68,8 +151,9 @@ bool Annotation::hit(Point p, float tol) const
             return length(p - a) <= tol;
         Point u = v * (1 / len), n{-u.y, u.x};
         float head = std::min(len * .45f, std::max(12.0f, thickness * 3));
-        return segmentDistance(p, b, b - u * head + n * (head * .5f)) <= tol ||
-               segmentDistance(p, b, b - u * head - n * (head * .5f)) <= tol;
+        const float headHalfWidth = head * .5f;
+        return segmentDistance(p, b, b - u * head + n * headHalfWidth) <= tol ||
+               segmentDistance(p, b, b - u * head - n * headHalfWidth) <= tol;
     }
     if (kind == Tool::Circle)
     {

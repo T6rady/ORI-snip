@@ -52,7 +52,7 @@ class Graphics
   public:
     Com<ID2D1Factory> factory;
     Com<IDWriteFactory> textFactory;
-    Com<IDWriteTextFormat> font, smallFont, titleFont;
+    Com<IDWriteTextFormat> font, smallFont, titleFont, labelFont;
     Com<ID2D1StrokeStyle> roundStroke, dashStroke, dotStroke;
     void initialize();
     void drawAnnotations(ID2D1RenderTarget *target, const std::vector<Annotation> &items);

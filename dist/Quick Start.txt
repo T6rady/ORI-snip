@@ -2,21 +2,27 @@ SNIPPER 1.0.1
 
 Double-click Snipper.exe. No installation required.
 
-Click Snip, drag an area, and release. Pen is selected automatically.
+Click New snip, drag an area, and release. Pen is selected automatically.
 Ctrl+C copies the image with all annotations. Capturing never automatically copies.
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 
 Pen: draw with different widths and colors.
 Circle/Arrow: drag to create; choose a color.
-Use the small arrow beside Circle, Arrow, Check, and Line to choose from three styles.
-Arrows: classic, outlined with a black border, or curved with a glossy highlight.
+Use the small arrow beside Circle, Arrow, Check, and Line to choose a style.
+Arrows: classic, outlined with a black border, curved gloss, or straight gloss.
 Line: solid, dashed, or dotted. Hold Shift to snap its angle; L selects Line.
 Check: click to place a green boxed check or drag to size it.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
+Draw and Shapes have separate toolbar groups, with shapes aligned to the right.
+Undo/redo sits beside New snip. Hover for hints and shortcuts.
+Color, stroke width, and zoom sit in their own row. Copy confirms with "Copied!".
+Each tool remembers its own last color and style, including after File > Exit.
+Preferences save on close/exit only. New captures still start with Pen.
 
 Settings > Keyboard shortcut changes the global snipping shortcut.
 Default: Ctrl+Alt+S. Keep the app running for the global shortcut.
+Hover a menu and press the shortcut: the screen freezes before selection or save prompts.
 
 Closing the window leaves a small tray process and releases the screenshot.
 Click the tray icon to snip. File > Exit quits entirely.

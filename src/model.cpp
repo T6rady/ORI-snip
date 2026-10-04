@@ -44,7 +44,7 @@ std::vector<Point> Annotation::arrowContour() const
     float headHalf = std::max(half * 2.1f, length(b - base) * .60f);
     auto side = [&](int step, float sign) {
         float fraction = step / 48.0f, t = baseT * fraction;
-        Point tangent = v - n * (len * 1.2f * (1 - 2 * t));
+        Point tangent = style == 2 ? v - n * (len * 1.2f * (1 - 2 * t)) : v;
         tangent = tangent * (1 / length(tangent));
         Point normal{-tangent.y, tangent.x};
         if (step == 48)

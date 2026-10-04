@@ -34,6 +34,7 @@ void Graphics::initialize()
     makeFont(font, 13, DWRITE_FONT_WEIGHT_MEDIUM);
     makeFont(smallFont, 12, DWRITE_FONT_WEIGHT_NORMAL);
     makeFont(titleFont, 28, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    makeFont(labelFont, 10, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     check(factory->CreateStrokeStyle(
               D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
                                           D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND),
@@ -118,7 +119,7 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
                 brush->SetColor(color(rgb(12, 12, 16)));
                 rt->DrawGeometry(path.get(), brush.get(), std::min(len * .06f, std::max(1.2f, width * .45f)),
                                  roundStroke.get());
-                if (item.style == 2)
+                if (item.style == 2 || item.style == 3)
                 {
                     const Color c = item.color;
                     brush->SetColor(color(rgb((c & 255) / 2 + 127, ((c >> 8) & 255) / 2 + 127,
@@ -507,10 +508,10 @@ void Graphics::test()
     size_t old = (10 * 160 + 50) * 4, next = (30 * 160 + 50) * 4;
     if (moved.pixels[old] != 255 || moved.pixels[next] != 0 || moved.pixels[next + 2] != 255)
         throw std::runtime_error("Moved sticker export test failed.");
-    auto preview = Bitmap::create(960, 360);
+    auto preview = Bitmap::create(1280, 360);
     std::fill(preview.pixels.begin(), preview.pixels.end(), 255);
     std::vector<Annotation> samples;
-    for (int style = 0; style < 3; ++style)
+    for (int style = 0; style < 4; ++style)
     {
         Annotation sample;
         sample.kind = Tool::Arrow;
@@ -527,11 +528,14 @@ void Graphics::test()
         if (!sample.hit(sample.arrowSpine(.5f), 0) || sample.hit({0, 359}, 0))
             throw std::runtime_error("Arrow artwork hit testing failed.");
         samples.push_back(sample);
-        sample.kind = Tool::Line;
-        sample.color = rgb(37, 99, 235);
-        sample.a = {60.0f + style * 320, 285};
-        sample.b = {270.0f + style * 320, 285};
-        samples.push_back(sample);
+        if (style < 3)
+        {
+            sample.kind = Tool::Line;
+            sample.color = rgb(37, 99, 235);
+            sample.a = {60.0f + style * 320, 285};
+            sample.b = {270.0f + style * 320, 285};
+            samples.push_back(sample);
+        }
     }
     auto rendered = flatten(preview, samples);
     int runs[3]{};
@@ -566,6 +570,26 @@ void Graphics::test()
     }
     if (runs[0] != 1 || runs[1] < 3 || runs[2] <= runs[1])
         throw std::runtime_error("Solid/dashed/dotted line export patterns failed.");
+    const size_t shinePixel = (static_cast<size_t>(100) * rendered.width + 1125) * 4;
+    if (rendered.pixels[shinePixel + 2] < 200 || rendered.pixels[shinePixel] < 80 ||
+        rendered.pixels[shinePixel] > 200)
+        throw std::runtime_error("Straight gloss arrow lost its highlight.");
+    const Annotation &gloss = samples.back();
+    if (length(gloss.arrowSpine(.5f) - Point{1125, 100}) > .001f ||
+        gloss.hit({1125, 140}, 0) || !gloss.hit({1125, 100}, 0))
+        throw std::runtime_error("Straight gloss arrow geometry or selection failed.");
+    int glossBorder = 0, glossFill = 0;
+    for (int y = 60; y < 145; ++y)
+        for (int x = 1000; x < 1250; ++x)
+        {
+            const size_t i = (static_cast<size_t>(y) * rendered.width + x) * 4;
+            if (rendered.pixels[i] < 40 && rendered.pixels[i + 1] < 40 && rendered.pixels[i + 2] < 40)
+                ++glossBorder;
+            if (rendered.pixels[i + 2] > 180 && rendered.pixels[i] < 100)
+                ++glossFill;
+        }
+    if (glossBorder < 10 || glossFill < 40 || decode(png(rendered)).pixels != rendered.pixels)
+        throw std::runtime_error("Straight gloss arrow border/fill or PNG round trip failed.");
     saveBytes(L"annotation-style-preview.png", png(rendered));
 }
 } // namespace snip

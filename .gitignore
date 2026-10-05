@@ -5,6 +5,7 @@ dist/JackSnip.ini
 llvm-release.json
 test-output/
 self-test-results.txt
+resize-test-results.txt
 smoke-test-*
 smoke-settings.ini
 *.obj

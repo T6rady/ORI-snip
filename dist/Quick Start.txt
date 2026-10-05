@@ -7,6 +7,11 @@ Ctrl+C copies the image with all annotations. Capturing never automatically copi
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 
 Pen: draw with different widths and colors; the cursor previews the brush size and color.
+Highlight: click Highlight or press H, then drag a translucent chisel brush.
+It starts yellow at 24 px wide. Color and width (4-80 px) save on close/exit,
+separately from Pen. Text stays visible beneath the highlight.
+In narrow windows, use the chisel icon between Pen and Text; hover for its hint.
+Select highlights to move, resize, recolor, or delete them. Undo/redo is supported.
 Hold the size + or - button to quickly adjust brush or font size. Move off to pause; release to stop.
 Text: press T, click the image, and type. Size, B (bold), Box, and colors are in the toolbar.
 The typing field fits the text and shows the screenshot behind plain text, without an input bar.
@@ -27,7 +32,7 @@ Check: choose boxed, circle-badge, or simple green checks and red Xs from its dr
 Click to place or drag to size. Switching checks/Xs picks green/red; colors can be customized.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
-Select/Pen/Text and Shapes have separate toolbar groups, with shapes aligned to the right.
+Select/Pen/Highlight/Text and Shapes have separate toolbar groups, with shapes aligned to the right.
 Undo/redo sits beside New snip. Hover for hints and shortcuts.
 Color, stroke width, and zoom sit in their own row. Copy confirms with "Copied!".
 A successful Copy or Ctrl+C also briefly flashes the image, fading out in 280 ms.
@@ -48,6 +53,14 @@ Preferences save on close/exit only. New captures still start with Pen.
 Settings > Keyboard shortcut changes the global snipping shortcut.
 Default: Ctrl+Alt+S. Keep the app running for the global shortcut.
 Hover a menu and press the shortcut: the screen freezes before selection.
+
+Settings > Rendering... lets you switch how Snipper draws its window.
+Check Use software rendering (compatibility mode) if resizing or maximizing
+freezes the window, leaves stale content, or takes seconds to redraw.
+Leave it unchecked for hardware acceleration, the default for most PCs.
+Software rendering may use more CPU on large displays. Click Apply to switch
+immediately and save the choice in JackSnip.ini beside the executable.
+No restart is needed. Copied and saved image quality is unchanged.
 
 Settings > Save location... lets you choose the default folder for saved snips.
 Click Use this folder to remember it immediately, including after restarting.

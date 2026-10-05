@@ -4,6 +4,40 @@
 
 namespace snip
 {
+std::vector<Point> chiselSegment(Point a, Point b, float width)
+{
+    std::vector<Point> candidates;
+    candidates.reserve(8);
+    for (Point center : {a, b})
+        for (Point offset : {Point{-.3f, -.5f}, Point{.05f, -.5f},
+                             Point{.3f, .5f}, Point{-.05f, .5f}})
+            candidates.push_back(center + offset * width);
+    std::sort(candidates.begin(), candidates.end(), [](Point x, Point y) {
+        return x.x < y.x || (x.x == y.x && x.y < y.y);
+    });
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    auto cross = [](Point x, Point y, Point z) {
+        auto u = y - x, v = z - x;
+        return u.x * v.y - u.y * v.x;
+    };
+    std::vector<Point> hull;
+    hull.reserve(9);
+    for (Point p : candidates)
+    {
+        while (hull.size() >= 2 && cross(hull[hull.size() - 2], hull.back(), p) <= 0)
+            hull.pop_back();
+        hull.push_back(p);
+    }
+    const size_t lower = hull.size();
+    for (auto i = candidates.rbegin() + 1; i != candidates.rend(); ++i)
+    {
+        while (hull.size() > lower && cross(hull[hull.size() - 2], hull.back(), *i) <= 0)
+            hull.pop_back();
+        hull.push_back(*i);
+    }
+    hull.pop_back();
+    return hull;
+}
 float segmentDistance(Point p, Point a, Point b)
 {
     Point v = b - a, w = p - a;
@@ -87,7 +121,7 @@ Rect Annotation::bounds() const
             return r;
         }
     }
-    if (kind != Tool::Pen || points.empty())
+    if ((kind != Tool::Pen && kind != Tool::Highlight) || points.empty())
         return rectangle(a, b);
     Rect r{points[0].x, points[0].y, points[0].x, points[0].y};
     for (auto p : points)
@@ -97,6 +131,9 @@ Rect Annotation::bounds() const
         r.right = std::max(r.right, p.x);
         r.bottom = std::max(r.bottom, p.y);
     }
+    if (kind == Tool::Highlight)
+        return {r.left - thickness * .3f, r.top - thickness * .5f,
+                r.right + thickness * .3f, r.bottom + thickness * .5f};
     return r;
 }
 void Annotation::move(Point d)
@@ -108,6 +145,17 @@ void Annotation::move(Point d)
 }
 void Annotation::resize(Rect from, Rect to)
 {
+    if (kind == Tool::Highlight)
+    {
+        const float scale = std::min(to.width() / std::max(1.0f, from.width()),
+                                     to.height() / std::max(1.0f, from.height()));
+        const float oldWidth = thickness;
+        thickness = std::max(.1f, oldWidth * scale);
+        from = {from.left + oldWidth * .3f, from.top + oldWidth * .5f,
+                from.right - oldWidth * .3f, from.bottom - oldWidth * .5f};
+        to = {to.left + thickness * .3f, to.top + thickness * .5f,
+              to.right - thickness * .3f, to.bottom - thickness * .5f};
+    }
     if (kind == Tool::Text)
     {
         const float scale = std::min(to.width() / std::max(1.0f, from.width()),
@@ -127,6 +175,28 @@ void Annotation::resize(Rect from, Rect to)
 }
 bool Annotation::hit(Point p, float tol) const
 {
+    if (kind == Tool::Highlight)
+    {
+        if (points.empty() || !bounds().contains(p, tol))
+            return false;
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            auto hull = chiselSegment(points[i ? i - 1 : 0], points[i], thickness);
+            bool inside = false;
+            for (size_t j = 0; j < hull.size(); ++j)
+            {
+                Point x = hull[j], y = hull[(j + 1) % hull.size()];
+                if (segmentDistance(p, x, y) <= tol)
+                    return true;
+                if ((x.y > p.y) != (y.y > p.y) &&
+                    p.x < (y.x - x.x) * (p.y - x.y) / (y.y - x.y) + x.x)
+                    inside = !inside;
+            }
+            if (inside)
+                return true;
+        }
+        return false;
+    }
     tol += thickness / 2;
     if (!bounds().contains(p, tol + (kind == Tool::Arrow ? std::max(12.0f, thickness * 3) : 0)))
         return false;
@@ -289,6 +359,18 @@ void runModelTests()
     pen.resize(pen.bounds(), {10, 10, 30, 50});
     require(pen.points[1].x == 30 && pen.points[1].y == 50);
     Annotation text;
+    Annotation highlight;
+    highlight.kind = Tool::Highlight;
+    highlight.thickness = 20;
+    highlight.points = {{50, 50}, {150, 50}};
+    require(highlight.bounds().left == 44 && highlight.bounds().bottom == 60);
+    require(highlight.hit({100, 59}, 0) && !highlight.hit({100, 62}, 0));
+    require(!highlight.hit({43, 50}, 0));
+    highlight.resize(highlight.bounds(), {88, 80, 312, 120});
+    require(highlight.thickness == 40 && highlight.bounds().left == 88 &&
+            highlight.bounds().right == 312 && highlight.bounds().bottom == 120);
+    highlight.move({10, 15});
+    require(highlight.hit({200, 115}, 0) && highlight.bounds().left == 98);
     text.kind = Tool::Text;
     text.a = {10, 10};
     text.b = {110, 40};

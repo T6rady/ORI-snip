@@ -11,15 +11,17 @@
 #include <array>
 #include <string>
 #include <stdexcept>
+#include <chrono>
+#include <sstream>
 
 using namespace snip;
 namespace
 {
 constexpr wchar_t MainClass[] = L"JackSnip.Main.1", OverlayClass[] = L"JackSnip.Capture.1",
-                  SettingsClass[] = L"JackSnip.Settings.1";
+                  SettingsClass[] = L"JackSnip.Settings.1", DiagnosticClass[] = L"JackSnip.ResizeDiagnostic.1";
 constexpr UINT TrayMessage = WM_APP + 20, LaunchMessage = WM_APP + 21;
 constexpr UINT CaptureTimer = 1, StatusTimer = 2, SmokeTimer = 3, CopyFlashTimer = 4,
-               SizeRepeatTimer = 5;
+               SizeRepeatTimer = 5, TraceHeartbeatTimer = 6;
 constexpr UINT SizeRepeatDelay = 300, SizeRepeatInterval = 35;
 constexpr float StatusHeight = 32, ScrollbarSize = 16;
 constexpr Color Accent = rgb(108, 72, 231), Ink = rgb(35, 39, 56), Muted = rgb(123, 128, 147);
@@ -64,6 +66,8 @@ enum Command
     ToggleActions,
     ToggleTools,
     ToggleFormatting,
+    RenderingSettings,
+    HighlightTool,
     ColorFirst = 1100,
     ShowEditor = 1200,
     CircleStyleMenu = 1300,
@@ -80,10 +84,10 @@ constexpr const wchar_t *LogoStyleNames[] = {L"S - White badge", L"S - Soft wate
 const std::array<Color, 8> Palette = {rgb(239, 68, 68),   rgb(249, 115, 22), rgb(250, 204, 21),
                                       rgb(34, 197, 94),   rgb(14, 165, 233), rgb(168, 85, 247),
                                       rgb(255, 255, 255), rgb(15, 23, 42)};
-constexpr std::array<uint8_t, 8> StyleCounts = {1, 1, 3, 5, 6, 3, 4, 1};
+constexpr std::array<uint8_t, 9> StyleCounts = {1, 1, 3, 5, 6, 3, 4, 1, 1};
 constexpr int StyleChoiceStride = 8;
 constexpr const wchar_t *ToolNames[] = {L"Select", L"Pen", L"Circle", L"Arrow", L"Check", L"Line",
-                                       L"Rectangle", L"Text"};
+                                       L"Rectangle", L"Text", L"Highlight"};
 constexpr std::array<int, 10> FontSizes = {12, 16, 20, 24, 32, 40, 48, 64, 96, 144};
 constexpr int styleCommand(Tool tool, int style)
 {
@@ -112,6 +116,14 @@ enum class Drag
 };
 struct Application
 {
+    bool resizeTest = false, resizeTestIdle = false, softwareRendering = false, rendererSpecified = false,
+         diagnosticInstance = false;
+    std::ofstream resizeTrace;
+    struct PaintTiming
+    {
+        double layout = 0, background = 0, content = 0, present = 0;
+    } paintTiming;
+    unsigned resizeTestPaints = 0;
     HINSTANCE instance = nullptr;
     HWND window = nullptr, overlay = nullptr, settingsWindow = nullptr, hotkeyControl = nullptr,
          tooltip = nullptr;
@@ -128,6 +140,8 @@ struct Application
     Graphics graphics;
     ExportOptions exportOptions;
     Com<ID2D1HwndRenderTarget> target;
+    Com<ID2D1BitmapBrush> workspaceBrush;
+    float workspaceBrushDpiX = 0, workspaceBrushDpiY = 0;
     Com<ID2D1Bitmap> displayBitmap;
     Bitmap previewImage;
     std::vector<Annotation> previewItems;
@@ -140,15 +154,16 @@ struct Application
     HCURSOR penCursor = nullptr;
     float penCursorDiameter = 0;
     Color penCursorColor = 0;
+    Tool penCursorTool = Tool::Pen;
     Document document;
     Tool tool = Tool::Select;
-    std::array<Color, 8> colors = {Palette[0], Palette[0], Palette[0],
-                                   Palette[0], Palette[3], Palette[0], Palette[0], Ink};
-    std::array<uint8_t, 8> styles{};
+    std::array<Color, 9> colors = {Palette[0], Palette[0], Palette[0],
+                                   Palette[0], Palette[3], Palette[0], Palette[0], Ink, Palette[2]};
+    std::array<uint8_t, 9> styles{};
     Tool geometryTool = Tool::Circle;
     float fontSize = 24;
     bool textBold = false, textBox = false;
-    float thickness = 4, dpi = 1;
+    float thickness = 4, highlightWidth = 24, dpi = 1;
     View view;
     bool fit = true, dirty = false, capturePending = false, exiting = false, tray = false,
          spaceDown = false;
@@ -159,7 +174,7 @@ struct Application
     HMENU logoMenu = nullptr;
     HMENU professionalMenu = nullptr;
     unsigned collapsedRows = 0;
-    bool layoutPreferencesDirty = false, fullScreen = false;
+    bool layoutPreferencesDirty = false, fullScreen = false, interactiveResize = false;
     bool horizontalVisible = false, verticalVisible = false;
     HWND horizontalScroll = nullptr, verticalScroll = nullptr;
     WINDOWPLACEMENT windowedPlacement{};
@@ -181,6 +196,48 @@ struct Application
     size_t tooltipCount = 0;
     UINT taskbarCreated = 0;
 } app;
+
+class ResizeTrace
+{
+    const char *name;
+    UINT message;
+    std::chrono::steady_clock::time_point start;
+    bool enabled;
+    static inline unsigned depth = 0;
+    static inline std::ostringstream pending;
+
+  public:
+    explicit ResizeTrace(const char *operation, UINT windowMessage = 0) :
+        name(operation), message(windowMessage), enabled(app.resizeTrace.is_open())
+    {
+        if (enabled)
+        {
+            ++depth;
+            start = std::chrono::steady_clock::now();
+        }
+    }
+    ~ResizeTrace()
+    {
+        if (!enabled)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - start).count();
+        if (name || ms >= 100)
+            pending << GetTickCount64() << " " << (name ? name : "WM_OTHER") << " " << ms <<
+                "ms depth=" << depth << " message=" << message << "\n";
+        if (--depth == 0)
+        {
+            // Batch diagnostic I/O after the outer operation has finished painting.
+            const auto entries = pending.str();
+            if (!entries.empty())
+            {
+                app.resizeTrace << entries;
+                app.resizeTrace.flush();
+            }
+            pending.str("");
+        }
+    }
+};
 
 LRESULT CALLBACK mainProcedure(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK overlayProcedure(HWND, UINT, WPARAM, LPARAM);
@@ -299,8 +356,20 @@ bool textMode()
     return app.tool == Tool::Text ||
            (selected() && app.document.items[app.document.selected].kind == Tool::Text);
 }
+bool highlightMode()
+{
+    return selected() ? app.document.items[app.document.selected].kind == Tool::Highlight
+                      : app.tool == Tool::Highlight;
+}
+float brushWidth()
+{
+    return highlightMode() ? app.highlightWidth : app.thickness;
+}
 void loadToolPreferences()
 {
+    if (!app.rendererSpecified)
+        app.softwareRendering =
+            GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 0;
     app.collapsedRows = GetPrivateProfileIntW(L"Settings", L"CollapsedRows", 0, app.iniPath.c_str()) & 7U;
     app.layoutPreferencesDirty = false;
     wchar_t folder[32768]{};
@@ -333,6 +402,8 @@ void loadToolPreferences()
     }
     const UINT fontSize = GetPrivateProfileIntW(L"ToolPreferences", L"TextFontSize", 24, app.iniPath.c_str());
     app.fontSize = static_cast<float>(std::clamp(fontSize, 8U, 144U));
+    app.highlightWidth = static_cast<float>(std::clamp(
+        GetPrivateProfileIntW(L"ToolPreferences", L"HighlightWidth", 24, app.iniPath.c_str()), 4U, 80U));
     app.textBold = GetPrivateProfileIntW(L"ToolPreferences", L"TextBold", 0, app.iniPath.c_str()) != 0;
     app.textBox = GetPrivateProfileIntW(L"ToolPreferences", L"TextBox", 0, app.iniPath.c_str()) != 0;
     app.geometryTool = GetPrivateProfileIntW(L"ToolPreferences", L"GeometryTool",
@@ -385,6 +456,7 @@ bool saveToolPreferences()
         section.push_back(L'\0');
     };
     preference(L"TextFontSize", static_cast<int>(app.fontSize));
+    preference(L"HighlightWidth", static_cast<int>(app.highlightWidth));
     preference(L"TextBold", app.textBold);
     preference(L"TextBox", app.textBox);
     preference(L"GeometryTool", static_cast<int>(app.geometryTool));
@@ -541,7 +613,7 @@ void showEditor()
 }
 void updateTitle()
 {
-    std::wstring title = L"Snipper";
+    std::wstring title = app.diagnosticInstance ? L"Snipper - Resize diagnostic" : L"Snipper";
     if (hasImage())
         title += L"  |  " + std::to_wstring(app.image.width) + L" x " +
                  std::to_wstring(app.image.height) + (app.dirty ? L"  *" : L"");
@@ -562,6 +634,7 @@ void releaseImage()
     app.dirty = false;
     app.fit = true;
     app.view = {};
+    app.workspaceBrush.reset();
     app.target.reset();
     app.status.clear();
     updateTitle();
@@ -737,14 +810,48 @@ Bitmap penCursorPixels(float diameter, Color value)
         }
     return bitmap;
 }
+Bitmap chiselCursorPixels(float width, Color value)
+{
+    width = std::max(1.0f, width);
+    const int extent = static_cast<int>(std::ceil(width)) + 6;
+    auto bitmap = Bitmap::create(extent, extent);
+    const Point center{extent / 2 + .5f, extent / 2 + .5f};
+    const auto hull = chiselSegment(center, center, width);
+    for (int y = 0; y < extent; ++y)
+        for (int x = 0; x < extent; ++x)
+        {
+            Point p{x + .5f, y + .5f};
+            float distance = width + 6;
+            bool inside = true;
+            for (size_t i = 0; i < hull.size(); ++i)
+            {
+                Point a = hull[i], b = hull[(i + 1) % hull.size()];
+                auto edge = b - a, delta = p - a;
+                inside &= edge.x * delta.y - edge.y * delta.x >= 0;
+                distance = std::min(distance, segmentDistance(p, a, b));
+            }
+            if (!inside)
+                distance = -distance;
+            const float outer = std::clamp(distance + 2.5f, 0.0f, 1.0f);
+            const float black = std::clamp(distance + 1.5f, 0.0f, 1.0f);
+            const float fill = std::clamp(distance + .5f, 0.0f, 1.0f);
+            const size_t offset = (static_cast<size_t>(y) * extent + x) * 4;
+            for (int channel = 0; channel < 3; ++channel)
+                bitmap.pixels[offset + channel] = static_cast<uint8_t>(std::round(
+                    255 * (outer - black) + ((value >> ((2 - channel) * 8)) & 255) * fill));
+            bitmap.pixels[offset + 3] = static_cast<uint8_t>(std::round(255 * outer));
+        }
+    return bitmap;
+}
 HCURSOR currentPenCursor()
 {
-    const float diameter = std::max(1.0f, app.thickness * app.view.scale * app.dpi);
-    const Color value = app.colors[static_cast<size_t>(Tool::Pen)];
+    const bool highlight = app.tool == Tool::Highlight;
+    const float diameter = std::max(1.0f, (highlight ? app.highlightWidth : app.thickness) * app.view.scale * app.dpi);
+    const Color value = app.colors[static_cast<size_t>(highlight ? Tool::Highlight : Tool::Pen)];
     if (app.penCursor && std::abs(diameter - app.penCursorDiameter) < .001f &&
-        value == app.penCursorColor)
+        value == app.penCursorColor && app.penCursorTool == app.tool)
         return app.penCursor;
-    const auto pixels = penCursorPixels(diameter, value);
+    const auto pixels = highlight ? chiselCursorPixels(diameter, value) : penCursorPixels(diameter, value);
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = pixels.width;
@@ -777,6 +884,7 @@ HCURSOR currentPenCursor()
     app.penCursor = cursor;
     app.penCursorDiameter = diameter;
     app.penCursorColor = value;
+    app.penCursorTool = app.tool;
     if (previous)
     {
         if (GetCursor() == previous)
@@ -801,7 +909,7 @@ HCURSOR editorCursor(Point point)
         return LoadCursorW(nullptr, IDC_CROSS);
     if (onCanvas && app.tool == Tool::Text)
         return LoadCursorW(nullptr, IDC_IBEAM);
-    if (onCanvas && app.tool == Tool::Pen)
+    if (onCanvas && (app.tool == Tool::Pen || app.tool == Tool::Highlight))
         return currentPenCursor();
     return LoadCursorW(nullptr, onCanvas && app.tool != Tool::Select ? IDC_CROSS : IDC_ARROW);
 }
@@ -873,7 +981,7 @@ ToolbarLayout toolbarLayout()
     const float formattingWidth = textMode() ? 264 : 160;
     // Center the whole label/control group between the eyedropper and zoom controls.
     const float formattingLeft = (410 + width - 140 - formattingWidth) / 2;
-    return {{20, rowTop(1) + 15, 310, rowTop(1) + 59},
+    return {{20, rowTop(1) + 15, width >= 980 ? 422.0f : 310.0f, rowTop(1) + 59},
             {width - 504, rowTop(1) + 15, width - 20, rowTop(1) + 59},
             {formattingLeft, rowTop(2) + 7, formattingLeft + formattingWidth, rowTop(2) + 35}};
 }
@@ -909,11 +1017,14 @@ void buildButtons()
     if (!app.fullScreen && !(app.collapsedRows & 2))
     {
         x = layout.draw.left + 8;
-        add(SelectTool, L"Select", 90, rowTop(1) + 19);
-        x += 8;
-        add(PenTool, L"Pen", 80, rowTop(1) + 19);
-        x += 8;
-        add(TextTool, L"Text", 80, rowTop(1) + 19);
+        const bool wide = clientDips().right >= 980;
+        add(SelectTool, L"Select", wide ? 86 : 78, rowTop(1) + 19);
+        x += wide ? 8 : 4;
+        add(PenTool, L"Pen", wide ? 74 : 64, rowTop(1) + 19);
+        x += wide ? 8 : 4;
+        add(HighlightTool, wide ? L"Highlight" : L"", wide ? 108 : 36, rowTop(1) + 19);
+        x += wide ? 8 : 4;
+        add(TextTool, L"Text", wide ? 74 : 70, rowTop(1) + 19);
         x = layout.shapes.left + 8;
         addStyleTool(CircleTool, L"Shapes", CircleStyleMenu);
         addStyleTool(ArrowTool, L"Arrow", ArrowStyleMenu);
@@ -1014,6 +1125,9 @@ void buildButtons()
                 break;
             case PenTool:
                 hint = L"Freehand pen (P)";
+                break;
+            case HighlightTool:
+                hint = L"Highlight (H) - translucent chisel brush; color and width are remembered";
                 break;
             case TextTool:
                 hint = L"Text (T) - click anywhere and type";
@@ -1117,13 +1231,15 @@ bool enabled(int id)
     if (id == NewSnip)
         return !app.capturePending && !app.overlay;
     if (id == Copy || id == Save || id == SaveAs || id == Fit || id == Actual || id == CenterView || id == Eyedropper ||
-        id == TextTool || id == RectangleTool || id == TextBold || id == TextBox || id == TextSizeMenu ||
+        id == TextTool || id == HighlightTool || id == RectangleTool || id == TextBold || id == TextBox || id == TextSizeMenu ||
         (id >= SelectTool && id <= LineTool) || (id >= CircleStyleMenu && id <= LineStyleMenu))
         return hasImage();
     return true;
 }
 bool active(int id)
 {
+    if (id == HighlightTool)
+        return app.tool == Tool::Highlight;
     if (id == TextTool)
         return app.tool == Tool::Text;
     if (id == CircleTool)
@@ -1142,19 +1258,131 @@ bool active(int id)
 }
 void ensureTarget()
 {
-    if (app.target)
-        return;
-    app.graphics.initialize();
+    ResizeTrace trace("ensureTarget");
     RECT rect{};
     GetClientRect(app.window, &rect);
-    auto properties = D2D1::RenderTargetProperties();
+    const auto size = D2D1::SizeU(std::max(1L, rect.right), std::max(1L, rect.bottom));
+    if (app.target)
+    {
+        const auto previous = app.target->GetPixelSize();
+        // Coalesce size messages and resize the backing surface only when painting.
+        if (previous.width != size.width || previous.height != size.height)
+        {
+            HRESULT result;
+            {
+                ResizeTrace resize("D2D.Resize");
+                result = app.target->Resize(size);
+            }
+            if (result != D2DERR_RECREATE_TARGET)
+            {
+                check(result, "Cannot resize the editor renderer.");
+                return;
+            }
+            app.target.reset();
+        }
+        else
+            return;
+    }
+    app.workspaceBrush.reset();
+    app.displayBitmap.reset();
+    app.graphics.initialize();
+    auto properties = D2D1::RenderTargetProperties(app.softwareRendering
+        ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT);
     properties.dpiX = properties.dpiY = app.dpi * 96;
     check(app.graphics.factory->CreateHwndRenderTarget(
               properties,
               D2D1::HwndRenderTargetProperties(
-                  app.window, D2D1::SizeU(std::max(1L, rect.right), std::max(1L, rect.bottom))),
+                  app.window, size, D2D1_PRESENT_OPTIONS_IMMEDIATELY),
               app.target.put()),
           "Cannot initialize the editor renderer.");
+}
+Com<ID2D1BitmapBrush> createWorkspaceBrush(ID2D1RenderTarget *rt)
+{
+    // Render one antialiased dot at the target's DPI, then repeat this 24-DIP tile.
+    // Use one drawing call at every window size instead of thousands of ellipses.
+    Com<ID2D1BitmapRenderTarget> tile;
+    check(rt->CreateCompatibleRenderTarget(D2D1::SizeF(24, 24), tile.put()),
+          "Cannot create workspace pattern.");
+    Com<ID2D1SolidColorBrush> dot;
+    check(tile->CreateSolidColorBrush(color(rgb(222, 225, 236)), dot.put()),
+          "Cannot draw workspace pattern.");
+    tile->BeginDraw();
+    tile->Clear(D2D1::ColorF(0, 0));
+    tile->FillEllipse(D2D1::Ellipse({18, 18}, .8f, .8f), dot.get());
+    check(tile->EndDraw(), "Cannot finish workspace pattern.");
+    Com<ID2D1Bitmap> bitmap;
+    check(tile->GetBitmap(bitmap.put()), "Cannot read workspace pattern.");
+    Com<ID2D1BitmapBrush> brush;
+    check(rt->CreateBitmapBrush(bitmap.get(),
+        D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP), brush.put()),
+        "Cannot paint workspace pattern.");
+    return brush;
+}
+bool setSoftwareRendering(bool software)
+{
+    if (software != app.softwareRendering)
+    {
+        // Keep the previous renderer available if creating the replacement fails.
+        // The screenshot, CPU preview, annotations, history, selection, and view stay intact.
+        auto previousTarget = std::move(app.target);
+        auto previousPattern = std::move(app.workspaceBrush);
+        auto previousDisplay = std::move(app.displayBitmap);
+        const bool previousMode = app.softwareRendering;
+        app.softwareRendering = software;
+        try
+        {
+            ensureTarget();
+        }
+        catch (...)
+        {
+            app.target = std::move(previousTarget);
+            app.workspaceBrush = std::move(previousPattern);
+            app.displayBitmap = std::move(previousDisplay);
+            app.softwareRendering = previousMode;
+            throw;
+        }
+    }
+    app.rendererSpecified = false; // An explicit UI choice takes precedence over launch overrides.
+    const bool saved = WritePrivateProfileStringW(L"Settings", L"SoftwareRendering",
+        software ? L"1" : L"0", app.iniPath.c_str()) != FALSE;
+    status(software ? L"Software rendering enabled" : L"Hardware acceleration enabled");
+    UpdateWindow(app.window);
+    return saved;
+}
+void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR context = 0)
+{
+    static constexpr TASKDIALOG_BUTTON buttons[] = {{IDOK, L"Apply"}};
+    TASKDIALOGCONFIG dialog{};
+    dialog.cbSize = sizeof(dialog);
+    dialog.hwndParent = app.window;
+    dialog.hInstance = app.instance;
+    dialog.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_ALLOW_DIALOG_CANCELLATION |
+        TDF_POSITION_RELATIVE_TO_WINDOW | (app.softwareRendering ? TDF_VERIFICATION_FLAG_CHECKED : 0) |
+        (callback ? TDF_CALLBACK_TIMER : 0));
+    dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    dialog.pszWindowTitle = L"Rendering - Snipper";
+    dialog.pszMainInstruction = L"Choose how Snipper draws its window";
+    dialog.pszContent =
+        L"Enable software rendering if Snipper freezes, shows stale content, or takes seconds to "
+        L"redraw when you resize or maximize the window.\n\n"
+        L"Off: hardware acceleration (recommended for most PCs).\n"
+        L"On: software rendering, which can help with graphics-driver issues but may use more CPU "
+        L"on large displays.\n\n"
+        L"Changes apply immediately and are remembered. Copied and saved image quality is unchanged.";
+    dialog.pszVerificationText = L"Use software rendering (compatibility mode)";
+    dialog.pszFooter = L"This setting affects Snipper only.";
+    dialog.cButtons = 1;
+    dialog.pButtons = buttons;
+    dialog.nDefaultButton = IDOK;
+    dialog.cxWidth = 340;
+    dialog.pfCallback = callback;
+    dialog.lpCallbackData = context;
+    int choice = IDCANCEL;
+    BOOL software = app.softwareRendering;
+    check(TaskDialogIndirect(&dialog, &choice, nullptr, &software), "Cannot open rendering settings.");
+    if (choice == IDOK && !setSoftwareRendering(software != FALSE))
+        error(app.window, "Rendering changed for this session, but the preference could not be saved. "
+              "Keep Snipper in a writable folder to remember this setting.");
 }
 void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Point origin,
                 Color foreground)
@@ -1211,6 +1439,13 @@ void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Poin
         line(3, 17, 4, 12);
         line(11, 5, 15, 9);
         break;
+    case HighlightTool:
+        line(4, 14, 11, 3);
+        line(11, 3, 17, 7);
+        line(17, 7, 10, 18);
+        line(10, 18, 4, 14);
+        line(3, 19, 14, 19);
+        break;
     case TextTool:
         line(3, 4, 17, 4);
         line(10, 4, 10, 17);
@@ -1257,13 +1492,41 @@ void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Poin
 }
 void paintEditor(ID2D1RenderTarget *alternate = nullptr)
 {
+    ResizeTrace trace(alternate ? "paint.offscreen" : "paint.window");
+    using Clock = std::chrono::steady_clock;
+    auto phaseStart = app.resizeTest ? Clock::now() : Clock::time_point{};
+    auto phase = [&](double &elapsed) {
+        if (app.resizeTest)
+        {
+            auto now = Clock::now();
+            elapsed = std::chrono::duration<double, std::milli>(now - phaseStart).count();
+            phaseStart = now;
+        }
+    };
     if (!alternate)
         ensureTarget();
-    updateView();
-    buildButtons();
+    {
+        ResizeTrace layout("paint.layout");
+        updateView();
+        buildButtons();
+    }
     ID2D1RenderTarget *rt = alternate ? alternate : app.target.get();
     auto client = clientDips(), canvas = canvasRect();
     Com<ID2D1Bitmap> alternateBitmap;
+    Com<ID2D1BitmapBrush> alternateWorkspaceBrush;
+    auto &workspaceBrush = alternate ? alternateWorkspaceBrush : app.workspaceBrush;
+    float dpiX = 0, dpiY = 0;
+    rt->GetDpi(&dpiX, &dpiY);
+    if (!workspaceBrush || (!alternate &&
+        (app.workspaceBrushDpiX != dpiX || app.workspaceBrushDpiY != dpiY)))
+    {
+        workspaceBrush = createWorkspaceBrush(rt);
+        if (!alternate)
+        {
+            app.workspaceBrushDpiX = dpiX;
+            app.workspaceBrushDpiY = dpiY;
+        }
+    }
     Com<ID2D1SolidColorBrush> brush;
     check(rt->CreateSolidColorBrush(color(rgb(15, 23, 42)), brush.put()),
           "Cannot paint the editor.");
@@ -1293,15 +1556,15 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         rt->DrawRoundedRectangle(D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, 10, 10),
                                  brush.get(), 1);
     };
+    phase(app.paintTiming.layout);
     rt->BeginDraw();
     rt->Clear(color(rgb(246, 247, 251)));
     rt->PushAxisAlignedClip({canvas.left, canvas.top, canvas.right, canvas.bottom},
                             D2D1_ANTIALIAS_MODE_ALIASED);
-    brush->SetColor(color(rgb(222, 225, 236)));
-    for (float y = canvas.top + 18; y < canvas.bottom; y += 24)
-        for (float x = 18; x < canvas.right; x += 24)
-            rt->FillEllipse(D2D1::Ellipse({x, y}, .8f, .8f), brush.get());
+    workspaceBrush->SetTransform(D2D1::Matrix3x2F::Translation(0, canvas.top));
+    rt->FillRectangle({canvas.left, canvas.top, canvas.right, canvas.bottom}, workspaceBrush.get());
     rt->PopAxisAlignedClip();
+    phase(app.paintTiming.background);
     fill({0, client.bottom - StatusHeight, client.right, client.bottom}, rgb(255, 255, 255));
     fill({0, client.bottom - StatusHeight, client.right, client.bottom - StatusHeight + 1},
          rgb(231, 233, 241));
@@ -1347,7 +1610,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
              app.graphics.smallFont.get());
         const float formattingLeft = layout.formatting.left;
         divider((410 + formattingLeft) / 2, formatTop + 11, formatTop + 31);
-        text(textMode() ? L"Size" : L"Stroke",
+        text(textMode() ? L"Size" : highlightMode() ? L"Width" : L"Stroke",
              {formattingLeft, formatTop + 5, formattingLeft + 45, formatTop + 37}, Muted,
              app.graphics.smallFont.get());
         rounded({formattingLeft + 52, formatTop + 7, formattingLeft + 160, formatTop + 35},
@@ -1473,7 +1736,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         }
         else if (button.command == NewSnip || button.command == Copy || button.command == Save ||
                  button.command == SelectTool || button.command == PenTool ||
-                 button.command == TextTool)
+                 button.command == TextTool || button.command == HighlightTool)
         {
             float inset = button.command == NewSnip ? 12 : 9;
             if (copied)
@@ -1508,7 +1771,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                               [](const Button &b) { return b.command == SizeDown; });
     float size = selected() && app.document.items[app.document.selected].kind != Tool::Check
                      ? app.document.items[app.document.selected].thickness
-                     : app.thickness;
+                     : brushWidth();
     if (minus != app.buttons.end() && !textMode())
         text(std::to_wstring(static_cast<int>(size)) + L" px",
              {minus->rect.right + 2, minus->rect.top, minus->rect.right + 52, minus->rect.bottom},
@@ -1621,7 +1884,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                 L"Check / X: click to place; drag to size",
                 L"Line: drag to draw; Shift snaps angle; drag endpoints to resize",
                 L"Rectangle: drag to draw; Shift makes a square",
-                L"Text: click and type; Ctrl+Enter finishes; double-click to edit"};
+                L"Text: click and type; Ctrl+Enter finishes; double-click to edit",
+                L"Highlight: drag with the chisel brush; change color or width below; Ctrl+Z undoes"};
             message = app.pickingColor ? L"Eyedropper: click the image to pick a color; Esc cancels"
                       : app.textEdit ? L"Text: Ctrl+Enter finishes; Enter adds a line; Esc cancels"
                                      : hints[static_cast<int>(app.tool)];
@@ -1642,10 +1906,20 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                  std::to_wstring(app.image.height),
              {client.right - 190, client.bottom - StatusHeight, client.right - 12, client.bottom},
              Muted, app.graphics.smallFont.get(), true);
-    HRESULT result = rt->EndDraw();
+    phase(app.paintTiming.content);
+    HRESULT result;
+    {
+        ResizeTrace present("D2D.EndDraw");
+        result = rt->EndDraw();
+    }
+    phase(app.paintTiming.present);
+    if (app.resizeTest)
+        ++app.resizeTestPaints;
     if (result == D2DERR_RECREATE_TARGET)
     {
-        resetPreview();
+        // The CPU preview is still valid; only target-owned GPU resources were lost.
+        app.displayBitmap.reset();
+        app.workspaceBrush.reset();
         app.target.reset();
         repaint();
     }
@@ -2047,9 +2321,17 @@ void changeThickness(int delta)
     }
     float previous = selected() && app.document.items[app.document.selected].kind != Tool::Check
                          ? app.document.items[app.document.selected].thickness
-                         : app.thickness;
-    float value = std::clamp(previous + delta, 1.0f, 40.0f);
-    app.thickness = value;
+                         : brushWidth();
+    const bool highlight = highlightMode();
+    float value = std::clamp(previous + delta, highlight ? 4.0f : 1.0f, highlight ? 80.0f : 40.0f);
+    if (highlight)
+    {
+        app.highlightWidth = value;
+        if (value != previous)
+            app.toolPreferencesDirty = true;
+    }
+    else
+        app.thickness = value;
     if (value != previous && selected() &&
         app.document.items[app.document.selected].kind != Tool::Check)
     {
@@ -2236,10 +2518,10 @@ void mouseDown(LPARAM lp, bool middle = false)
     Annotation item;
     item.kind = app.tool;
     item.color = app.colors[static_cast<size_t>(app.tool)];
-    item.thickness = app.thickness;
+    item.thickness = brushWidth();
     item.style = app.styles[static_cast<size_t>(app.tool)];
     item.a = item.b = p;
-    if (app.tool == Tool::Pen)
+    if (app.tool == Tool::Pen || app.tool == Tool::Highlight)
         item.points.push_back(p);
     app.document.items.push_back(std::move(item));
     app.document.selected = static_cast<int>(app.document.items.size()) - 1;
@@ -2287,7 +2569,7 @@ void mouseMove(LPARAM lp)
     if (app.drag == Drag::Draw)
     {
         p = limited(p);
-        if (app.tool == Tool::Pen)
+        if (app.tool == Tool::Pen || app.tool == Tool::Highlight)
         {
             if (length(p - item.points.back()) >= .6f)
                 item.points.push_back(p);
@@ -2371,7 +2653,7 @@ void mouseUp(LPARAM lp)
     if (app.drag == Drag::Draw && selected())
     {
         auto &item = app.document.items[app.document.selected];
-        if (item.kind != Tool::Pen && length(item.b - item.a) < 4)
+        if (item.kind != Tool::Pen && item.kind != Tool::Highlight && length(item.b - item.a) < 4)
         {
             float size = item.kind == Tool::Check ? 56 : 90;
             size = std::min(
@@ -2384,7 +2666,7 @@ void mouseUp(LPARAM lp)
             item.b = a + Point{size, item.kind == Tool::Line ? 0.0f : size};
         }
         // Shape tools switch to selection after placement so moving the new object takes one drag.
-        if (item.kind != Tool::Pen)
+        if (item.kind != Tool::Pen && item.kind != Tool::Highlight)
             app.tool = Tool::Select;
         else
             app.document.selected = -1;
@@ -2821,6 +3103,10 @@ void command(int id)
     }
     switch (id)
     {
+    case HighlightTool:
+        if (hasImage())
+            selectTool(Tool::Highlight);
+        break;
     case TextTool:
         if (hasImage())
             selectTool(Tool::Text);
@@ -2980,6 +3266,9 @@ void command(int id)
     case Settings:
         openSettings();
         break;
+    case RenderingSettings:
+        openRenderingSettings();
+        break;
     case SaveLocation:
         chooseSaveFolder();
         break;
@@ -3019,7 +3308,7 @@ void command(int id)
             app.window,
             L"Snipper 1.0.1\n\nNative C++ screenshot editor.\nDeveloped by Jack Kempf\n\nCtrl+N: new snip\nCtrl+C: "
             L"copy image with annotations\nCtrl+S: save PNG\nCtrl+Shift+S: Save As\nCtrl+Z "
-            L"/ Ctrl+Y: undo / redo\nV / P / O / A / K / L: select / pen / circle / arrow / "
+            L"/ Ctrl+Y: undo / redo\nV / P / H / T / O / A / K / L: select / pen / highlight / text / circle / arrow / "
             L"check / line\n[ / ]: brush size\nDelete: remove selection\nCtrl+wheel: "
             L"zoom\nMiddle-drag or Space+drag: pan\nEsc: cancel capture or current "
             L"edit\n\nClose the window to stay in the tray.\nFile > Exit quits "
@@ -3283,6 +3572,7 @@ HMENU createMenu()
     AppendMenuW(view, MF_STRING, ToggleTools, L"&Tools and shapes row");
     AppendMenuW(view, MF_STRING, ToggleFormatting, L"Color and &size row");
     AppendMenuW(settings, MF_STRING, Settings, L"&Keyboard shortcut...");
+    AppendMenuW(settings, MF_STRING, RenderingSettings, L"&Rendering...");
     AppendMenuW(settings, MF_STRING, SaveLocation, L"Save &location...");
     AppendMenuW(settings, MF_STRING, Startup, L"Run at &sign-in");
     AppendMenuW(settings, MF_SEPARATOR, 0, nullptr);
@@ -3434,6 +3724,9 @@ void processKey(WPARAM key)
         break;
     case 'P':
         command(PenTool);
+        break;
+    case 'H':
+        command(HighlightTool);
         break;
     case 'T':
         command(TextTool);
@@ -3595,13 +3888,22 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     }
     case WM_SIZE:
         finishTextEditing();
-        if (app.target && wp != SIZE_MINIMIZED)
+        if (wp != SIZE_MINIMIZED)
         {
-            auto size = D2D1::SizeU(LOWORD(lp), HIWORD(lp));
-            app.target->Resize(size);
+            repaint();
+            // Maximize/restore must replace the old frame before returning to Windows.
+            // During border dragging, let the modal sizing loop coalesce paint requests.
+            if (!app.interactiveResize && IsWindowVisible(hwnd))
+                UpdateWindow(hwnd);
         }
-        updateView();
+        return 0;
+    case WM_ENTERSIZEMOVE:
+        app.interactiveResize = true;
+        return 0;
+    case WM_EXITSIZEMOVE:
+        app.interactiveResize = false;
         repaint();
+        UpdateWindow(hwnd);
         return 0;
     case WM_DPICHANGED: {
         app.dpi = HIWORD(wp) / 96.0f;
@@ -3937,6 +4239,19 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 }
 LRESULT CALLBACK mainProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
+    const char *operation = message == WM_SIZE ? "WM_SIZE" :
+        message == WM_PAINT ? "WM_PAINT" : message == WM_SYSCOMMAND ?
+        ((wp & 0xfff0) == SC_MAXIMIZE ? "SC_MAXIMIZE" : (wp & 0xfff0) == SC_RESTORE ?
+        "SC_RESTORE" : "WM_SYSCOMMAND") :
+        message == WM_NCLBUTTONDBLCLK ? "WM_NCLBUTTONDBLCLK" :
+        message == WM_WINDOWPOSCHANGING ? "WM_WINDOWPOSCHANGING" :
+        message == WM_WINDOWPOSCHANGED ? "WM_WINDOWPOSCHANGED" :
+        message == WM_NCCALCSIZE ? "WM_NCCALCSIZE" : message == WM_NCPAINT ? "WM_NCPAINT" :
+        message == WM_DPICHANGED ? "WM_DPICHANGED" :
+        message == WM_TIMER && wp == TraceHeartbeatTimer ? "heartbeat" : nullptr;
+    // Trace resize messages, diagnostic heartbeats, and other messages taking over 100 ms.
+    // Normal launches perform no diagnostic I/O or heartbeat polling.
+    ResizeTrace trace(operation, message);
     try
     {
         return mainMessage(hwnd, message, wp, lp);
@@ -4078,7 +4393,7 @@ void registerClasses()
     cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.hIcon = LoadIconW(app.instance, MAKEINTRESOURCEW(101));
     cls.hIconSm = cls.hIcon;
-    cls.lpszClassName = MainClass;
+    cls.lpszClassName = app.diagnosticInstance ? DiagnosticClass : MainClass;
     cls.lpfnWndProc = mainProcedure;
     if (!RegisterClassExW(&cls))
         throw std::runtime_error("Cannot register the editor window.");
@@ -4099,6 +4414,352 @@ void writeTestReport(const wchar_t *filename, const std::string &content)
 {
     std::ofstream file(filename, std::ios::binary);
     file << content;
+}
+struct RenderingDialogTest
+{
+    bool software, handled = false;
+    int button;
+    const wchar_t *preview;
+    std::string error;
+};
+Bitmap renderNativeWindow(HWND window)
+{
+    RECT bounds{};
+    GetWindowRect(window, &bounds);
+    auto result = Bitmap::create(bounds.right - bounds.left, bounds.bottom - bounds.top);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = result.width;
+    info.bmiHeader.biHeight = -result.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    void *pixels = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP surface = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    if (!dc || !surface)
+    {
+        if (surface) DeleteObject(surface);
+        if (dc) DeleteDC(dc);
+        throw std::runtime_error("Cannot create native dialog preview.");
+    }
+    const auto previous = SelectObject(dc, surface);
+    const bool painted = PrintWindow(window, dc, PW_RENDERFULLCONTENT) != FALSE;
+    if (painted)
+    {
+        std::memcpy(result.pixels.data(), pixels, result.pixels.size());
+        for (size_t i = 3; i < result.pixels.size(); i += 4)
+            result.pixels[i] = 255;
+    }
+    SelectObject(dc, previous);
+    DeleteObject(surface);
+    DeleteDC(dc);
+    if (!painted)
+        throw std::runtime_error("Cannot render native dialog preview.");
+    return result;
+}
+HRESULT CALLBACK renderingDialogTestCallback(HWND hwnd, UINT notification, WPARAM elapsed,
+                                            LPARAM, LONG_PTR context)
+{
+    auto &test = *reinterpret_cast<RenderingDialogTest *>(context);
+    if (notification == TDN_CREATED)
+        SendMessageW(hwnd, TDM_CLICK_VERIFICATION, test.software, TRUE);
+    if (notification == TDN_TIMER && elapsed >= 200 && !test.handled)
+    {
+        test.handled = true;
+        try
+        {
+            saveBytes(test.preview, app.graphics.png(renderNativeWindow(hwnd)));
+        }
+        catch (const std::exception &exception)
+        {
+            test.error = exception.what();
+        }
+        SendMessageW(hwnd, TDM_CLICK_BUTTON, test.error.empty() ? test.button : IDCANCEL, 0);
+    }
+    return S_OK;
+}
+void testRenderingSettings()
+{
+    const bool originalMode = app.softwareRendering;
+    auto dialog = [&](bool software, int button, const wchar_t *preview) {
+        RenderingDialogTest test{software, false, button, preview, {}};
+        openRenderingSettings(renderingDialogTestCallback, reinterpret_cast<LONG_PTR>(&test));
+        if (!test.handled || !test.error.empty())
+            throw std::runtime_error("Rendering dialog test failed: " + test.error);
+    };
+    if (GetMenuState(GetMenu(app.window), RenderingSettings, MF_BYCOMMAND) == static_cast<UINT>(-1))
+        throw std::runtime_error("Rendering settings are missing from the menu.");
+    if (!setSoftwareRendering(false))
+        throw std::runtime_error("Cannot establish rendering test settings.");
+    dialog(true, IDOK, L"smoke-test-rendering-software.png");
+    if (!app.softwareRendering || app.rendererSpecified ||
+        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 1)
+        throw std::runtime_error("Applying software rendering did not switch and save it.");
+    dialog(false, IDCANCEL, L"smoke-test-rendering-cancel.png");
+    if (!app.softwareRendering ||
+        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 1)
+        throw std::runtime_error("Cancelling rendering settings changed the mode or preference.");
+    app.image = Bitmap::create(480, 320);
+    for (size_t i = 0; i < app.image.pixels.size(); i += 4)
+    {
+        app.image.pixels[i] = app.image.pixels[i + 1] = app.image.pixels[i + 2] = 245;
+        app.image.pixels[i + 3] = 255;
+    }
+    Annotation pen;
+    pen.points = {{20, 20}, {100, 120}, {160, 40}};
+    app.document.begin();
+    app.document.items.push_back(pen);
+    app.document.commit();
+    app.document.selected = 0;
+    app.dirty = true;
+    repaint();
+    UpdateWindow(app.window);
+    const auto source = app.image.pixels;
+    const auto items = app.document.items;
+    const auto exported = app.graphics.exportImage(app.image, items, app.exportOptions).pixels;
+    const auto *cachedPreview = app.previewImage.pixels.data();
+    const auto view = app.view;
+    dialog(false, IDOK, L"smoke-test-rendering-hardware.png");
+    if (app.softwareRendering ||
+        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 1, app.iniPath.c_str()) != 0)
+        throw std::runtime_error("Applying hardware rendering did not switch and save it.");
+    if (app.image.pixels != source || app.document.items != items || app.document.selected != 0 ||
+        !app.dirty || app.previewImage.pixels.data() != cachedPreview ||
+        app.view.scale != view.scale || app.view.origin != view.origin ||
+        app.graphics.exportImage(app.image, app.document.items, app.exportOptions).pixels != exported ||
+        !app.document.undo() || !app.document.items.empty() || !app.document.redo() ||
+        app.document.items != items)
+        throw std::runtime_error("Switching renderers changed the snip, annotations, history, view, or export.");
+    if (!setSoftwareRendering(originalMode))
+        throw std::runtime_error("Cannot restore rendering test settings.");
+    releaseImage();
+    repaint();
+    UpdateWindow(app.window);
+}
+void testHighlightTool()
+{
+    const auto originalColors = app.colors;
+    const auto originalWidth = app.highlightWidth;
+    const auto originalThickness = app.thickness;
+    const auto originalIni = app.iniPath;
+    const auto originalOptions = app.exportOptions;
+    if (app.colors[static_cast<size_t>(Tool::Highlight)] != Palette[2] || app.highlightWidth != 24)
+        throw std::runtime_error("Highlight must start yellow with a broad nib.");
+    app.exportOptions = {};
+    app.image = Bitmap::create(640, 360);
+    std::fill(app.image.pixels.begin(), app.image.pixels.end(), 255);
+    Annotation label;
+    label.kind = Tool::Text;
+    label.color = Ink;
+    label.a = {40, 100};
+    label.text = L"Highlight this text with a chisel brush";
+    app.graphics.measureText(label);
+    app.image = app.graphics.flatten(app.image, {label});
+    app.fit = true;
+    updateView();
+    buildButtons();
+    const auto button = std::find_if(app.buttons.begin(), app.buttons.end(),
+        [](const Button &b) { return b.command == HighlightTool; });
+    if (button == app.buttons.end() || !enabled(HighlightTool))
+        throw std::runtime_error("Highlight toolbar control is missing.");
+    auto toolbarPoint = MAKELPARAM(static_cast<int>((button->rect.left + button->rect.right) / 2 * app.dpi),
+                                  static_cast<int>((button->rect.top + button->rect.bottom) / 2 * app.dpi));
+    SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, toolbarPoint);
+    SendMessageW(app.window, WM_LBUTTONUP, 0, toolbarPoint);
+    if (!active(HighlightTool) || activeColor() != Palette[2] || brushWidth() != 24)
+        throw std::runtime_error("Highlight toolbar did not select its own color and width.");
+    auto point = [&](Point p) {
+        updateView();
+        p = app.view.toScreen(p) * app.dpi;
+        return MAKELPARAM(static_cast<int>(std::round(p.x)), static_cast<int>(std::round(p.y)));
+    };
+    SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point({40, 117}));
+    SendMessageW(app.window, WM_MOUSEMOVE, MK_LBUTTON, point({240, 117}));
+    SendMessageW(app.window, WM_MOUSEMOVE, MK_LBUTTON, point({520, 117}));
+    SendMessageW(app.window, WM_LBUTTONUP, 0, point({520, 117}));
+    if (app.tool != Tool::Highlight || selected() || app.document.items.size() != 1 ||
+        app.document.items[0].kind != Tool::Highlight || app.document.items[0].points.size() != 3 ||
+        app.document.items[0].thickness != 24 || app.document.items[0].color != Palette[2])
+        throw std::runtime_error("Highlight drag did not create a persistent freehand chisel stroke.");
+    const auto drawn = app.document.items;
+    const auto exported = renderedExport();
+    if (!app.document.undo() || !app.document.items.empty() || !app.document.redo() ||
+        app.document.items != drawn || renderedExport().pixels != exported.pixels ||
+        app.graphics.decode(app.graphics.png(exported)).pixels != exported.pixels)
+        throw std::runtime_error("Highlight undo/redo or export changed the stroke.");
+    repaint();
+    UpdateWindow(app.window);
+    saveBytes(L"smoke-test-highlight.png", app.graphics.png(renderEditorPreview()));
+    const auto pixels = chiselCursorPixels(24, Palette[2]);
+    if (pixels.sample({15, 15}) != Palette[2] || pixels.pixels[3] != 0)
+        throw std::runtime_error("Chisel cursor color or transparent edges failed.");
+    selectTool(Tool::Select);
+    app.document.selected = app.document.hit({250, 117}, 0);
+    if (!selected())
+        throw std::runtime_error("Highlight cannot be selected.");
+    changeColor(Palette[3]);
+    if (app.document.items[0].color != Palette[3] ||
+        app.colors[static_cast<size_t>(Tool::Highlight)] != Palette[3] ||
+        app.colors[static_cast<size_t>(Tool::Pen)] != originalColors[static_cast<size_t>(Tool::Pen)])
+        throw std::runtime_error("Recoloring a highlight lost its preference or changed the pen.");
+    selectTool(Tool::Pen);
+    SendMessageW(app.window, WM_KEYDOWN, 'H', 0);
+    if (app.tool != Tool::Highlight || activeColor() != Palette[3])
+        throw std::runtime_error("Highlight shortcut or remembered color failed.");
+    changeThickness(6);
+    if (brushWidth() != 30 || app.thickness != originalThickness)
+        throw std::runtime_error("Highlight width leaked into the pen width.");
+    const auto beforeCancel = app.document.items;
+    SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point({50, 200}));
+    SendMessageW(app.window, WM_MOUSEMOVE, MK_LBUTTON, point({300, 220}));
+    SendMessageW(app.window, WM_KEYDOWN, VK_ESCAPE, 0);
+    if (app.document.items != beforeCancel || app.document.editing() || app.drag != Drag::None)
+        throw std::runtime_error("Canceling a highlight kept an incomplete stroke.");
+    app.iniPath = (std::filesystem::current_path() / L"highlight-tool-settings.ini").wstring();
+    if (!saveToolPreferences())
+        throw std::runtime_error("Highlight preferences could not be saved.");
+    app.colors[static_cast<size_t>(Tool::Highlight)] = Palette[2];
+    app.highlightWidth = 24;
+    loadToolPreferences();
+    if (app.colors[static_cast<size_t>(Tool::Highlight)] != Palette[3] || app.highlightWidth != 30)
+        throw std::runtime_error("Highlight color and width did not survive preference reload.");
+    app.iniPath = originalIni;
+    app.colors = originalColors;
+    app.highlightWidth = originalWidth;
+    app.exportOptions = originalOptions;
+    app.toolPreferencesDirty = false;
+    releaseImage();
+    selectTool(Tool::Select);
+}
+void runResizeTest(HWND window)
+{
+    using Clock = std::chrono::steady_clock;
+    const int samples = app.resizeTestIdle ? 8 : 32;
+    auto idle = [&] {
+        if (!app.resizeTestIdle)
+            return;
+        const auto until = GetTickCount64() + 350;
+        while (GetTickCount64() < until)
+        {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+            {
+                if (message.message == WM_QUIT)
+                    throw std::runtime_error("Resize benchmark interrupted.");
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(until - std::min(until, GetTickCount64())),
+                                       QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    };
+    std::string report = std::string(app.softwareRendering ? "Software" : "Hardware/default") +
+        " resize benchmark (milliseconds, " + std::to_string(samples) + " samples per case; " +
+        (app.resizeTestIdle ? "350ms message-pumped idle between operations; " : "") +
+        "synthetic snip; clipboard untouched)\n";
+    RECT work{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    const int width = work.right - work.left, height = work.bottom - work.top;
+    for (int scenario = 0; scenario < 3; ++scenario)
+    {
+        releaseImage();
+        app.exportOptions = {};
+        if (scenario)
+        {
+            app.image = Bitmap::create(3840, 2160);
+            for (size_t i = 0; i < app.image.pixels.size(); i += 4)
+            {
+                app.image.pixels[i] = 240;
+                app.image.pixels[i + 1] = 230;
+                app.image.pixels[i + 2] = 220;
+                app.image.pixels[i + 3] = 255;
+            }
+            Annotation item;
+            item.kind = Tool::Arrow;
+            item.a = {100, 100};
+            item.b = {1200, 800};
+            app.document.items.push_back(item);
+            app.exportOptions.professionalBorder = scenario == 2;
+        }
+        ShowWindow(window, SW_SHOWNOACTIVATE);
+        SetWindowPos(window, nullptr, work.left, work.top, width, height,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        repaint();
+        UpdateWindow(window); // Warm caches; exclude first-time screenshot composition/upload.
+        for (int operation = 0; operation < 3; ++operation)
+        {
+            ShowWindow(window, SW_RESTORE);
+            if (operation == 0)
+                SetWindowPos(window, nullptr, 0, 0, std::min(width, 1050), std::min(height, 740),
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            std::vector<double> times;
+            Application::PaintTiming sums;
+            const auto *cachedPixels = app.previewImage.pixels.data();
+            const auto *cachedDisplay = app.displayBitmap.get();
+            const auto *cachedPattern = app.workspaceBrush.get();
+            for (int i = -4; i < samples; ++i)
+            {
+                idle();
+                const auto paintsBefore = app.resizeTestPaints;
+                const bool wasMaximized = IsZoomed(window);
+                auto start = Clock::now();
+                if (operation == 2)
+                    SendMessageW(window, WM_NCLBUTTONDBLCLK, HTCAPTION,
+                                 MAKELPARAM(work.left + 100, work.top + 10));
+                else if (operation == 1)
+                    ShowWindow(window, i % 2 ? SW_RESTORE : SW_MAXIMIZE);
+                else
+                    SetWindowPos(window, nullptr, 0, 0,
+                        i % 2 ? std::min(width, 1050) : width,
+                        i % 2 ? std::min(height, 740) : height,
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                if (app.resizeTestPaints == paintsBefore)
+                    throw std::runtime_error("Resize returned before painting the new editor layout.");
+                if (operation == 2 && bool(IsZoomed(window)) == wasMaximized)
+                    throw std::runtime_error("Title-bar double-click did not toggle maximize/restore.");
+                if (scenario && (!app.previewValid || app.previewImage.pixels.data() != cachedPixels))
+                    throw std::runtime_error("Resizing unnecessarily recomposed the screenshot.");
+                if (app.workspaceBrush.get() != cachedPattern ||
+                    (scenario && app.displayBitmap.get() != cachedDisplay))
+                    throw std::runtime_error("Resizing unnecessarily recreated cached drawing resources.");
+                if (scenario)
+                {
+                    const auto canvas = canvasRect();
+                    const float padding = previewPadding() * app.view.scale;
+                    const auto origin = app.view.origin - Point{padding, padding};
+                    const float right = origin.x + app.previewImage.width * app.view.scale;
+                    const float bottom = origin.y + app.previewImage.height * app.view.scale;
+                    if (origin.x < canvas.left || origin.y < canvas.top || right > canvas.right ||
+                        bottom > canvas.bottom ||
+                        std::abs(origin.x + right - canvas.left - canvas.right) > .1f ||
+                        std::abs(origin.y + bottom - canvas.top - canvas.bottom) > .1f)
+                        throw std::runtime_error("Resized snip was not fitted and centered immediately.");
+                }
+                double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+                if (i >= 0)
+                {
+                    times.push_back(elapsed);
+                    sums.layout += app.paintTiming.layout;
+                    sums.background += app.paintTiming.background;
+                    sums.content += app.paintTiming.content;
+                    sums.present += app.paintTiming.present;
+                }
+            }
+            std::sort(times.begin(), times.end());
+            report += std::string(scenario == 0 ? "blank" : scenario == 1 ? "4K snip" : "4K snip + border") +
+                (operation == 2 ? " title-bar double-click" : operation == 1 ? " maximize/restore" : " resize") +
+                ": median=" + std::to_string(times[samples / 2]) +
+                ", p95=" + std::to_string(times[static_cast<size_t>((samples - 1) * .95)]) +
+                ", worst=" + std::to_string(times.back()) +
+                "; paint averages: layout=" + std::to_string(sums.layout / samples) +
+                ", background=" + std::to_string(sums.background / samples) +
+                ", content=" + std::to_string(sums.content / samples) +
+                ", present=" + std::to_string(sums.present / samples) + "\n";
+        }
+    }
+    writeTestReport(L"resize-test-results.txt", report);
+    app.dirty = false;
+    DestroyWindow(window);
 }
 class SmokeNoPromptGuard
 {
@@ -4228,10 +4889,10 @@ class SmokeHoverPopup
         DestroyWindow(host);
     }
 };
-const std::array<Color, 8> PersistenceTestColors = {
+const std::array<Color, 9> PersistenceTestColors = {
     Palette[0],      rgb(12, 34, 56),  rgb(210, 87, 133), rgb(15, 120, 220),
-    rgb(8, 91, 200), rgb(90, 35, 170), rgb(18, 90, 140),  rgb(25, 50, 75)};
-const std::array<uint8_t, 8> PersistenceTestStyles = {0, 0, 1, 4, 5, 1, 1, 0};
+    rgb(8, 91, 200), rgb(90, 35, 170), rgb(18, 90, 140),  rgb(25, 50, 75), rgb(240, 180, 30)};
+const std::array<uint8_t, 9> PersistenceTestStyles = {0, 0, 1, 4, 5, 1, 1, 0, 0};
 std::wstring smokeMenuPreviewPath;
 std::string smokeMenuPreviewError;
 void CALLBACK smokeShapeMenuTimer(HWND hwnd, UINT, UINT_PTR id, DWORD)
@@ -4291,6 +4952,29 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             snipNow = true;
         else if (wcscmp(argv[i], L"--smoke-test") == 0)
             app.smoke = true;
+        else if (wcscmp(argv[i], L"--resize-test") == 0)
+            app.resizeTest = true;
+        else if (wcscmp(argv[i], L"--resize-idle-test") == 0)
+            app.resizeTest = app.resizeTestIdle = true;
+        else if (wcscmp(argv[i], L"--software-rendering") == 0)
+        {
+            app.softwareRendering = true;
+            app.rendererSpecified = true;
+        }
+        else if (wcscmp(argv[i], L"--hardware-rendering") == 0)
+        {
+            app.softwareRendering = false;
+            app.rendererSpecified = true;
+        }
+        else if (wcscmp(argv[i], L"--diagnostic-instance") == 0)
+            app.diagnosticInstance = true;
+        else if (wcscmp(argv[i], L"--trace-resize") == 0)
+        {
+            wchar_t temporary[MAX_PATH]{};
+            if (GetTempPathW(MAX_PATH, temporary))
+                app.resizeTrace.open(std::filesystem::path(temporary) /
+                    (L"Snipper-resize-" + std::to_wstring(GetCurrentProcessId()) + L".log"));
+        }
         else if (wcscmp(argv[i], L"--verify-smoke-preferences") == 0)
             verifyPreferences = true;
     }
@@ -4323,7 +5007,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             testPenCursor();
             writeTestReport(L"self-test-results.txt",
                             "PASS: model history, cancellation, hit testing, resizing, coordinate "
-                            "transforms, cropping, pen/circle/arrow/check composition, six check/X styles at small and large sizes, "
+                            "transforms, cropping, pen/circle/arrow/check composition, translucent chisel highlights with uniform "
+                            "stroke overlap, readable text, nib geometry, hit testing/resizing, and PNG round trips, six check/X styles at small and large sizes, "
                             "solid/dashed/dotted line patterns, outlined/curved/straight/block gloss arrow artwork and "
                             "selection, PNG "
                             "pixel-perfect round trip, moved annotations, image color sampling, "
@@ -4334,10 +5019,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         }
         else
         {
-            mutex = CreateMutexW(nullptr, FALSE, L"Local\\JackSnip.SingleInstance.1");
+            const std::wstring mutexName = app.diagnosticInstance
+                ? L"Local\\JackSnip.ResizeDiagnostic." + std::to_wstring(GetCurrentProcessId())
+                : L"Local\\JackSnip.SingleInstance.1";
+            mutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
             if (!mutex)
                 throw std::runtime_error("Cannot initialize the app instance.");
-            if (GetLastError() == ERROR_ALREADY_EXISTS && !app.smoke)
+            if (GetLastError() == ERROR_ALREADY_EXISTS && !app.smoke && !app.resizeTest)
             {
                 HWND existing = FindWindowW(MainClass, nullptr);
                 if (existing)
@@ -4365,8 +5053,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 GetCurrentDirectoryW(32768, testDirectory);
                 app.iniPath = std::wstring(testDirectory) + L"\\smoke-settings.ini";
             }
-            else
+            else if (!app.resizeTest)
                 loadToolPreferences();
+            if (app.resizeTrace.is_open())
+            {
+                app.resizeTrace << "Snipper resize trace; pid=" << GetCurrentProcessId() << "; build=" <<
+                    __DATE__ << " " << __TIME__ << "; renderer=" <<
+                    (app.softwareRendering ? "software" : "hardware/default") << "\n";
+                app.resizeTrace.flush();
+            }
+            if (app.diagnosticInstance)
+            {
+                wchar_t temporary[MAX_PATH]{};
+                if (!GetTempPathW(MAX_PATH, temporary))
+                    throw std::runtime_error("Cannot create isolated diagnostic settings.");
+                app.iniPath = (std::filesystem::path(temporary) /
+                    (L"Snipper-diagnostic-" + std::to_wstring(GetCurrentProcessId()) + L".ini")).wstring();
+            }
             app.hotkey = static_cast<WORD>(
                 GetPrivateProfileIntW(L"Settings", L"Hotkey", app.hotkey, app.iniPath.c_str()));
             HDC dc = GetDC(nullptr);
@@ -4382,26 +5085,31 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                                  static_cast<int>(work.right - work.left)),
                 height =
                     std::min(static_cast<int>(740 * dpi), static_cast<int>(work.bottom - work.top));
-            HWND window = CreateWindowExW(0, MainClass, L"Snipper", WS_OVERLAPPEDWINDOW,
+            HWND window = CreateWindowExW(0, app.diagnosticInstance ? DiagnosticClass : MainClass,
+                                          app.diagnosticInstance ? L"Snipper - Resize diagnostic" : L"Snipper", WS_OVERLAPPEDWINDOW,
                                           work.left + (work.right - work.left - width) / 2,
                                           work.top + (work.bottom - work.top - height) / 2, width,
                                           height, nullptr, createMenu(), instance, nullptr);
             if (!window)
                 throw std::runtime_error("Cannot create the editor window.");
+            if (app.resizeTrace.is_open())
+                SetTimer(window, TraceHeartbeatTimer, 250, nullptr);
             // The smoke process must not compete with the user's running global shortcut.
-            WORD initial = app.smoke ? 0 : app.hotkey;
+            WORD initial = app.smoke || app.resizeTest || app.diagnosticInstance ? 0 : app.hotkey;
             app.hotkey = 0;
             if (!registerShortcut(initial))
                 status(L"Shortcut unavailable - change it in Settings");
             if (!trayOnly || !app.tray)
             {
-                ShowWindow(window, show);
+                ShowWindow(window, app.resizeTest ? SW_SHOWNOACTIVATE : show);
                 UpdateWindow(window);
             }
             if (snipNow)
                 startSnip();
             SmokeNoPromptGuard noPrompts(app.smoke);
-            if (app.smoke)
+            if (app.resizeTest)
+                runResizeTest(window);
+            else if (app.smoke)
             {
                 // Exercise real Win32, Direct2D, and capture initialization without changing the
                 // clipboard.
@@ -4409,6 +5117,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 UpdateWindow(window);
                 DwmFlush();
                 saveBytes(L"smoke-test-home.png", app.graphics.png(renderEditorPreview()));
+                testRenderingSettings();
+                testHighlightTool();
                 auto clickButton = [&](int id, bool cancel = false) {
                     buildButtons();
                     const auto found =
@@ -5755,6 +6465,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 }
                 app.collapsedRows =
                     0; // Establish the persistence fixture independently of prior test runs.
+                // Earlier export tests exercise both states; explicitly establish this fixture.
+                if (!app.exportOptions.professionalBorder)
+                    command(ProfessionalBorder);
                 command(ToggleTools);
                 command(ToggleFormatting);
                 command(LogoStyleFirst + 5);
@@ -5803,7 +6516,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     "instant hotkey freezes focus-dismissed hover popup pixels before selection, "
                     "visible and hidden editor, instant cancellation preserves the previous snip, "
                     "native window, Direct2D editor, live desktop capture, selection overlay "
-                    "original pixels, mouse rectangle selection and cropping, mouse drawing, all "
+                    "original pixels, mouse rectangle selection and cropping, mouse drawing, yellow chisel highlight, "
+                    "highlight toolbar/shortcut, transparency, cancellation, recoloring, width, history, export, and persistence, all "
                     "stickers, red X click/drag/move/resize/delete/undo/redo, check/X default and custom colors, "
                     "solid/dashed/dotted lines and endpoint editing, outlined/curved "
                     "arrows, straight and block gloss arrows, "
@@ -5822,6 +6536,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     "save location menu, folder preference, existing-file preservation, unavailable-folder fallback, "
                     "PNG save in configured folder, native scrollbar panning, wheel/pan overflow gating, edge bounds, stable scrollbar visibility, zoom-preserving Center outside image, "
                     "all collapsed row combinations at 100/150/200% DPI, full screen F11/Esc and window restoration, "
+                    "rendering dialog Apply/Cancel, live hardware/software switching and saved preference, "
+                    "unchanged snip/annotations/history/selection/view/export during renderer changes, "
                     "settings dialog and persistence, per-tool styles/custom colors "
                     "saved on close, selected-shape recoloring remembers the correct tool.\n");
                 SetTimer(window, SmokeTimer, 1000, nullptr);
@@ -5841,8 +6557,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     catch (const std::exception &exception)
     {
         result = 1;
-        if (selfTest || app.smoke || verifyPreferences)
-            writeTestReport(verifyPreferences ? L"preference-test-results.txt" :
+        if (selfTest || app.smoke || verifyPreferences || app.resizeTest)
+            writeTestReport(app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
                             selfTest ? L"self-test-results.txt" : L"smoke-test-results.txt",
                             std::string("FAIL: ") + exception.what() + "\n");
         else
@@ -5854,6 +6570,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         }
     }
     resetPreview();
+    app.workspaceBrush.reset();
     app.target.reset();
     app.graphics.roundStroke.reset();
     app.graphics.dashStroke.reset();

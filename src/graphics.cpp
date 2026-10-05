@@ -138,6 +138,29 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             rt->DrawRoundedRectangle(box, brush.get(), width, roundStroke.get());
             break;
         }
+        case Tool::Highlight:
+        {
+            if (item.points.empty())
+                break;
+            Com<ID2D1PathGeometry> path;
+            Com<ID2D1GeometrySink> sink;
+            check(factory->CreatePathGeometry(path.put()), "Cannot create highlight path.");
+            check(path->Open(sink.put()), "Cannot draw highlight path.");
+            sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+            for (size_t i = 0; i < item.points.size(); ++i)
+            {
+                const auto hull = chiselSegment(item.points[i ? i - 1 : 0], item.points[i], width);
+                sink->BeginFigure({hull[0].x, hull[0].y}, D2D1_FIGURE_BEGIN_FILLED);
+                for (size_t j = 1; j < hull.size(); ++j)
+                    sink->AddLine({hull[j].x, hull[j].y});
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            }
+            check(sink->Close(), "Cannot finish highlight path.");
+            // Fill the union once: one stroke stays uniformly translucent at joins/crossings.
+            brush->SetColor(color(item.color, .35f));
+            rt->FillGeometry(path.get(), brush.get());
+            break;
+        }
         case Tool::Pen:
             if (item.points.size() == 1)
                 rt->FillEllipse(
@@ -844,6 +867,56 @@ void Graphics::test()
     runModelTests();
     auto source = Bitmap::create(160, 120);
     std::fill(source.pixels.begin(), source.pixels.end(), 255);
+    {
+        Annotation highlight;
+        highlight.kind = Tool::Highlight;
+        highlight.color = rgb(250, 204, 21);
+        highlight.thickness = 20;
+        highlight.points = {{20, 50}, {80, 50}, {140, 50}, {20, 50}, {140, 50}};
+        const auto highlighted = flatten(source, {highlight});
+        auto nearColor = [](Color actual, Color expected) {
+            for (int channel = 0; channel < 3; ++channel)
+                if (std::abs(static_cast<int>((actual >> (channel * 8)) & 255) -
+                             static_cast<int>((expected >> (channel * 8)) & 255)) > 2)
+                    return false;
+            return true;
+        };
+        if (!nearColor(*highlighted.sample({40, 50}), rgb(253, 237, 173)) ||
+            highlighted.sample({40, 50}) != highlighted.sample({80, 50}) ||
+            highlighted.sample({80, 50}) != highlighted.sample({120, 50}) ||
+            highlighted.sample({80, 65}) != rgb(255, 255, 255) ||
+            decode(png(highlighted)).pixels != highlighted.pixels)
+            throw std::runtime_error("Highlight transparency, stroke overlap, clipping, or PNG round trip failed.");
+        highlight.points = {{80, 50}};
+        const auto chisel = flatten(source, {highlight});
+        if (!nearColor(*chisel.sample({80, 42}), rgb(253, 237, 173)) ||
+            chisel.sample({72, 50}) != rgb(255, 255, 255))
+            throw std::runtime_error("Highlight nib is not a broad slanted chisel.");
+        auto textSource = source;
+        const size_t blackPixel = (50 * 160 + 80) * 4;
+        textSource.pixels[blackPixel] = textSource.pixels[blackPixel + 1] = textSource.pixels[blackPixel + 2] = 0;
+        const auto readable = flatten(textSource, {highlight});
+        if (!nearColor(*readable.sample({80, 50}), rgb(88, 71, 7)))
+            throw std::runtime_error("Highlight obscured the underlying text.");
+        const auto twice = flatten(source, {highlight, highlight});
+        if (*twice.sample({80, 50}) == *chisel.sample({80, 50}))
+            throw std::runtime_error("Separate highlight strokes did not blend in document order.");
+        auto highlightPreview = Bitmap::create(640, 240);
+        std::fill(highlightPreview.pixels.begin(), highlightPreview.pixels.end(), 255);
+        Annotation label;
+        label.kind = Tool::Text;
+        label.color = rgb(15, 23, 42);
+        label.fontSize = 24;
+        label.a = {32, 32};
+        label.text = L"Readable text under a yellow chisel highlight";
+        measureText(label);
+        highlight.points = {{30, 50}, {580, 50}};
+        highlight.thickness = 30;
+        Annotation blue = highlight;
+        blue.color = rgb(14, 165, 233);
+        blue.points = {{40, 140}, {250, 140}, {320, 110}, {400, 170}, {575, 145}};
+        saveBytes(L"highlight-preview.png", png(flatten(highlightPreview, {label, highlight, blue})));
+    }
     Annotation pen;
     pen.kind = Tool::Pen;
     pen.color = rgb(255, 0, 0);

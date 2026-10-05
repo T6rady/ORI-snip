@@ -53,7 +53,8 @@ enum class Tool
     Check,
     Line,
     Rectangle,
-    Text
+    Text,
+    Highlight
 };
 using Color = uint32_t;
 constexpr Color rgb(unsigned r, unsigned g, unsigned b)
@@ -117,5 +118,7 @@ struct View
     Point toScreen(Point image) const { return origin + image * scale; }
 };
 float segmentDistance(Point p, Point a, Point b);
+// Convex footprint of a fixed, slanted chisel nib swept between two points.
+std::vector<Point> chiselSegment(Point a, Point b, float width);
 void runModelTests();
 } // namespace snip

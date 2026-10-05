@@ -6,6 +6,8 @@ A small, native Windows screenshot tool written in C++20. No browser engine, .NE
 
 Double-click **Run Snipper.cmd** or **dist/Snipper.exe**. Click **New snip**, drag a rectangle, and release to open the image with **Pen already selected**. Press **Ctrl+C** to copy the screenshot and all annotations, or **Ctrl+S** to save a PNG. Capturing does not change your clipboard. Shapes, Arrow, Check, and Line have large visual style dropdowns.
 
+The welcome screen randomly chooses from ten lighthearted, workplace-friendly headlines whenever it opens, including **The snipping tool of your dreams!** Each appears as a single headline, without a secondary caption. Consecutive welcome messages do not repeat.
+
 The editor combines its capture icon and **New snip** action in one button, with undo/redo beside it and Copy/Save on the right. Select/Pen/Highlight/Text/Eraser and the right-aligned Shapes tools have separate outlined groups. In narrow windows, Highlight and Text use their chisel and T icons with tooltips. Color, stroke or font size, and zoom controls occupy their own row; text also shows Bold and Box toggles. Eraser shows **Whole object** instead of stroke-size controls. Hover a control for its shortcut or a quick hint; Copy briefly shows **Copied!** after a successful export. The dotted workspace, violet selection states, and circular handles belong to the editor only and do not appear in exported images.
 
 Each of the three toolbar rows has a small chevron at the far right to collapse or expand it. Collapsed rows keep a slim labeled strip so they are easy to reopen; the View menu also toggles each row. All rows start expanded. Their visibility is remembered on close or exit and restored after restarting.

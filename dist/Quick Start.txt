@@ -1,6 +1,8 @@
 SNIPPER 1.0.1
 
 Double-click Snipper.exe. No installation required.
+The welcome screen picks one of ten workplace-friendly headlines each time it opens,
+including "The snipping tool of your dreams!" It avoids repeating the last one.
 
 Click New snip, drag an area, and release. Pen is selected automatically.
 Ctrl+C copies the image with all annotations. Capturing never automatically copies.

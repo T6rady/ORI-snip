@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <chrono>
 #include <sstream>
+#include <random>
 
 using namespace snip;
 namespace
@@ -92,6 +93,18 @@ constexpr int StyleChoiceStride = 8;
 constexpr const wchar_t *ToolNames[] = {L"Select", L"Pen", L"Circle", L"Arrow", L"Check", L"Line",
                                        L"Rectangle", L"Text", L"Highlight"};
 constexpr std::array<int, 10> FontSizes = {12, 16, 20, 24, 32, 40, 48, 64, 96, 144};
+constexpr std::array<const wchar_t *, 10> WelcomeMessages = {
+    L"The snipping tool of your dreams!",
+    L"Small snip. Big possibilities.",
+    L"Big ideas. Small screenshots.",
+    L"A little snip goes a long way.",
+    L"Ready, set, snip!",
+    L"Make your point. Add an arrow.",
+    L"Your ideas look good in pixels.",
+    L"A clearer picture. A smoother workday.",
+    L"Small snips. Happier teammates.",
+    L"One snip closer to \"Got it!\""
+};
 constexpr int styleCommand(Tool tool, int style)
 {
     return StyleChoiceFirst + (static_cast<int>(tool) - static_cast<int>(Tool::Circle)) * StyleChoiceStride + style;
@@ -200,6 +213,7 @@ struct Application
     int handle = -1, virtualX = 0, virtualY = 0;
     POINT selectionStart{}, selectionEnd{};
     std::wstring iniPath, savePath, saveFolder, status;
+    size_t welcomeMessage = WelcomeMessages.size();
     WORD hotkey = MAKEWORD('S', HOTKEYF_CONTROL | HOTKEYF_ALT);
     WORD instantHotkey = MAKEWORD('F', HOTKEYF_CONTROL | HOTKEYF_ALT);
     int hotkeyId = 1;
@@ -684,8 +698,18 @@ void removeTray()
         app.tray = false;
     }
 }
+void chooseWelcomeMessage()
+{
+    static std::mt19937 random(static_cast<unsigned>(GetTickCount64() ^ GetCurrentProcessId()));
+    const bool previous = app.welcomeMessage < WelcomeMessages.size();
+    std::uniform_int_distribution<size_t> choice(0, WelcomeMessages.size() - (previous ? 2 : 1));
+    size_t next = choice(random);
+    if (previous && next >= app.welcomeMessage) ++next;
+    app.welcomeMessage = next;
+}
 void showEditor()
 {
+    if (!hasImage()) chooseWelcomeMessage();
     // Undo capture-time cloaking before restoring the editor.
     const BOOL uncloaked = FALSE;
     DwmSetWindowAttribute(app.window, DWMWA_CLOAK, &uncloaked, sizeof(uncloaked));
@@ -2153,10 +2177,9 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
             rt->DrawLine({cx + 32, middle - 123}, {cx + 44, middle - 123}, brush.get(), 2,
                          app.graphics.roundStroke.get());
         }
-        text(L"Small snip. Big possibilities.", {0, middle - 57, client.right, middle - 13}, Ink,
+        const auto welcome = WelcomeMessages[app.welcomeMessage % WelcomeMessages.size()];
+        text(welcome, {20, middle - 43, client.right - 20, middle + 1}, Ink,
              app.graphics.titleFont.get(), true);
-        text(L"Capture a moment. Add your own little touch.",
-             {0, middle - 7, client.right, middle + 19}, Muted, app.graphics.font.get(), true);
         // Primary action was painted with the toolbar buttons above.
         if (canvas.height() > 230)
         {
@@ -4276,6 +4299,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     {
     case WM_CREATE:
         app.window = hwnd;
+        chooseWelcomeMessage();
         app.dpi = dpiFor(hwnd);
         app.tooltip =
             CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,

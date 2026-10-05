@@ -5,13 +5,28 @@ Double-click Snipper.exe. No installation required.
 Click New snip, drag an area, and release. Pen is selected automatically.
 Ctrl+C copies the image with all annotations. Capturing never automatically copies.
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
+Ctrl+Alt+F instantly captures all monitors and the mouse pointer, preserving hover menus.
+Click Crop beside the full-screen button (or press C), drag the part to keep, and release.
+Esc cancels cropping. Ctrl+Z restores the previous image; Ctrl+Y reapplies the crop.
+Annotations move with the crop. Copy and Save export just the cropped image.
 
 Pen: draw with different widths and colors; the cursor previews the brush size and color.
+Colors: click + to add a toolbar swatch using the spectrum, RGB, or a hex code.
+Right-click any swatch to Edit color or Delete color. Keep four, ten, or more colors;
+larger palettes wrap onto extra rows. Your palette and order save on close/exit.
+Adding a color selects it; deleting a swatch leaves existing annotations unchanged.
+To keep an eyedropper color, click + and Add color. Cancel keeps the palette unchanged.
 Highlight: click Highlight or press H, then drag a translucent chisel brush.
 It starts yellow at 24 px wide. Color and width (4-80 px) save on close/exit,
 separately from Pen. Text stays visible beneath the highlight.
 In narrow windows, use the chisel icon between Pen and Text; hover for its hint.
 Select highlights to move, resize, recolor, or delete them. Undo/redo is supported.
+Eraser: click the eraser icon beside Text, press E, or choose Edit > Eraser.
+Click or drag over a mark to delete the entire drawn stroke or annotation.
+Erase an older mark while keeping newer marks elsewhere. At an overlap, a click
+removes the topmost annotation. One drag is one undo step; Ctrl+Z restores it.
+Esc during a drag cancels that erase. E again or another tool leaves eraser mode.
+The ring cursor shows the contact area. Original screenshot pixels stay intact.
 Hold the size + or - button to quickly adjust brush or font size. Move off to pause; release to stop.
 Text: press T, click the image, and type. Size, B (bold), Box, and colors are in the toolbar.
 The typing field fits the text and shows the screenshot behind plain text, without an input bar.
@@ -40,19 +55,29 @@ The flash stays in the editor and never appears in copied or saved pixels.
 Use the small chevron at the far right of any toolbar row to collapse/expand it.
 Collapsed rows keep a slim labeled strip; the View menu can toggle them too.
 All three rows start expanded. Collapsed rows are remembered on close/exit.
-Ctrl+mouse wheel zooms; visible scrollbars let you pan at 100% or larger sizes.
-Center in the bottom bar recenters without changing zoom. A Center image button
-also appears in empty workspace after zooming/panning, without covering the snip.
+Mouse wheel zooms around the pointer, from the fitted minimum up to 800%.
+The percentage is actual pixel scale; the fitted minimum adjusts to the window.
+Use Select and drag the zoomed image with the hand cursor to pan.
+Annotation strokes and handles still move/resize annotations. Middle-drag or
+Space+drag also pan. Panning stops at image edges; fitting axes stay centered.
+Zooming fully out always centers the complete image. Fit returns to this view.
 F11 or the full-screen button beside Undo/Redo opens a full-screen screenshot view.
 F11, Esc, or Exit full screen returns to the previous window and toolbar layout.
-Full screen retains Fit, 100%, and Center in a slim bottom strip.
+Full screen retains Fit and 100% in a slim bottom strip.
 Each tool remembers its own last color and style, including after File > Exit.
+Pen size (1-40 px, shared with shape strokes) is also remembered after restarting.
+Highlight width and text size are saved separately.
 Text also remembers font size, bold, and the rounded Box setting.
 Preferences save on close/exit only. New captures still start with Pen.
 
-Settings > Keyboard shortcut changes the global snipping shortcut.
-Default: Ctrl+Alt+S. Keep the app running for the global shortcut.
-Hover a menu and press the shortcut: the screen freezes before selection.
+Settings > Keyboard shortcuts lets you set two independent global shortcuts.
+Select an area: Ctrl+Alt+S by default, followed by click-and-drag selection.
+Instant capture: Ctrl+Alt+F by default, opens all monitors and the pointer in the editor.
+Hover a menu and press either shortcut: the screen freezes before focus changes.
+Keep the app running for the shortcuts. Backspace disables either one independently.
+Pause works by itself: focus a shortcut field, press Pause/Break, then Save.
+Other shortcuts need Ctrl or Alt; F12 is reserved.
+File and the tray menu also offer Capture all monitors now.
 
 Settings > Rendering... lets you switch how Snipper draws its window.
 Check Use software rendering (compatibility mode) if resizing or maximizing

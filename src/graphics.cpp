@@ -702,7 +702,7 @@ Bitmap Graphics::decode(const std::vector<uint8_t> &bytes)
           "Decode pixels failed.");
     return result;
 }
-Bitmap captureDesktop(int x, int y, int width, int height)
+Bitmap captureDesktop(int x, int y, int width, int height, bool includeCursor)
 {
     auto result = Bitmap::create(width, height);
     HDC screen = GetDC(nullptr);
@@ -728,7 +728,24 @@ Bitmap captureDesktop(int x, int y, int width, int height)
         throw std::runtime_error("Cannot allocate the screen capture.");
     }
     auto previous = SelectObject(memory, bitmap);
+    CURSORINFO cursor{};
+    cursor.cbSize = sizeof(cursor);
+    HICON cursorCopy = nullptr;
+    ICONINFO cursorIcon{};
+    if (includeCursor && GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING))
+    {
+        cursorCopy = CopyIcon(cursor.hCursor);
+        if (cursorCopy)
+            GetIconInfo(cursorCopy, &cursorIcon);
+    }
     BOOL success = BitBlt(memory, 0, 0, width, height, screen, x, y, SRCCOPY | CAPTUREBLT);
+    if (success && cursorCopy && cursorIcon.hbmMask)
+        DrawIconEx(memory, cursor.ptScreenPos.x - x - cursorIcon.xHotspot,
+                   cursor.ptScreenPos.y - y - cursorIcon.yHotspot,
+                   cursorCopy, 0, 0, 0, nullptr, DI_NORMAL);
+    if (cursorIcon.hbmColor) DeleteObject(cursorIcon.hbmColor);
+    if (cursorIcon.hbmMask) DeleteObject(cursorIcon.hbmMask);
+    if (cursorCopy) DestroyIcon(cursorCopy);
     GdiFlush();
     if (success)
         std::memcpy(result.pixels.data(), pixels, result.pixels.size());

@@ -252,7 +252,7 @@ bool Annotation::hit(Point p, float tol) const
 void Document::begin()
 {
     if (!pending_)
-        pending_ = items;
+        pending_ = State{items, cropBounds};
 }
 void Document::commit()
 {
@@ -268,7 +268,8 @@ void Document::cancel()
 {
     if (pending_)
     {
-        items = std::move(*pending_);
+        items = std::move(pending_->items);
+        cropBounds = pending_->cropBounds;
         pending_.reset();
         selected = -1;
     }
@@ -277,8 +278,9 @@ bool Document::undo()
 {
     if (pending_ || undo_.empty())
         return false;
-    redo_.push_back(std::move(items));
-    items = std::move(undo_.back());
+    redo_.push_back({std::move(items), cropBounds});
+    items = std::move(undo_.back().items);
+    cropBounds = undo_.back().cropBounds;
     undo_.pop_back();
     selected = -1;
     return true;
@@ -287,8 +289,9 @@ bool Document::redo()
 {
     if (pending_ || redo_.empty())
         return false;
-    undo_.push_back(std::move(items));
-    items = std::move(redo_.back());
+    undo_.push_back({std::move(items), cropBounds});
+    items = std::move(redo_.back().items);
+    cropBounds = redo_.back().cropBounds;
     redo_.pop_back();
     selected = -1;
     return true;
@@ -300,13 +303,82 @@ int Document::hit(Point p, float tolerance) const
             return i;
     return -1;
 }
+bool Document::eraseAlong(Point from, Point to, float tolerance)
+{
+    if (items.empty())
+        return false;
+    // Sample the swept eraser closely enough to catch thin strokes even when
+    // Windows delivers widely separated pointer events. Hit against the unchanged
+    // list first, so one contact removes the topmost object rather than its layers.
+    const int steps = static_cast<int>(std::ceil(length(to - from) / std::max(.25f, tolerance * .5f)));
+    std::vector<bool> touched(items.size());
+    std::vector<Rect> hitBounds;
+    hitBounds.reserve(items.size());
+    for (const auto &item : items)
+    {
+        auto r = item.bounds();
+        const float extra = tolerance + (item.kind == Tool::Highlight ? 0 : item.thickness / 2) +
+            (item.kind == Tool::Arrow ? std::max(12.0f, item.thickness * 3) : 0);
+        hitBounds.push_back({r.left - extra, r.top - extra, r.right + extra, r.bottom + extra});
+    }
+    bool changed = false;
+    for (int i = steps ? 1 : 0; i <= steps; ++i)
+    {
+        const Point p = steps ? from + (to - from) * (static_cast<float>(i) / steps) : from;
+        for (int index = static_cast<int>(items.size()) - 1; index >= 0; --index)
+            if (hitBounds[index].contains(p) && items[index].hit(p, tolerance))
+            {
+                touched[index] = true;
+                changed = true;
+                break;
+            }
+    }
+    if (!changed)
+        return false;
+    size_t index = 0;
+    std::erase_if(items, [&](const Annotation &) { return touched[index++]; });
+    selected = -1;
+    return true;
+}
 void Document::clear()
 {
     items.clear();
+    cropBounds.reset();
     selected = -1;
     pending_.reset();
     undo_.clear();
     redo_.clear();
+}
+float View::fittedScale(Rect viewport, Rect content, float nativeScale)
+{
+    return std::max(.0001f, std::min({std::max(1.0f, viewport.width()) / std::max(1.0f, content.width()),
+                                    std::max(1.0f, viewport.height()) / std::max(1.0f, content.height()),
+                                    nativeScale}));
+}
+void View::fitTo(Rect viewport, Rect content, float nativeScale)
+{
+    scale = fittedScale(viewport, content, nativeScale);
+    origin = {viewport.left + (viewport.width() - content.width() * scale) / 2 - content.left * scale,
+              viewport.top + (viewport.height() - content.height() * scale) / 2 - content.top * scale};
+}
+void View::constrain(Rect viewport, Rect content)
+{
+    auto axis = [&](float &position, float start, float end, float first, float last) {
+        const float extent = (last - first) * scale;
+        if (extent <= end - start + .001f)
+            position = start + (end - start - extent) / 2 - first * scale;
+        else
+            position = std::clamp(position, end - last * scale, start - first * scale);
+    };
+    axis(origin.x, viewport.left, viewport.right, content.left, content.right);
+    axis(origin.y, viewport.top, viewport.bottom, content.top, content.bottom);
+}
+void View::zoomAt(Point pointer, float nextScale, Rect viewport, Rect content)
+{
+    const Point focus = toImage(pointer);
+    scale = nextScale;
+    origin = pointer - focus * scale;
+    constrain(viewport, content);
 }
 Bitmap Bitmap::create(int w, int h)
 {
@@ -381,6 +453,36 @@ void runModelTests()
     text.move({15, 25});
     require(text.a.x == 35 && text.a.y == 45 && text.text == L"Work note");
     Document d;
+    {
+        Document erased;
+        Annotation oldStroke;
+        oldStroke.points = {{10, 40}, {100, 40}, {180, 80}};
+        Annotation kept = oldStroke;
+        kept.move({0, 80});
+        erased.items = {oldStroke, kept};
+        erased.begin();
+        require(erased.eraseAlong({60, 40}, {60, 40}, 2) && erased.items == std::vector<Annotation>{kept});
+        erased.commit();
+        require(erased.undo() && erased.items == std::vector<Annotation>{oldStroke, kept});
+        require(erased.redo() && erased.items == std::vector<Annotation>{kept});
+        erased.begin();
+        require(erased.eraseAlong({60, 120}, {60, 120}, 2));
+        erased.cancel();
+        require(erased.items == std::vector<Annotation>{kept});
+        // A fast sweep must hit a thin line between otherwise empty endpoints.
+        Annotation crossing;
+        crossing.kind = Tool::Line;
+        crossing.a = {45, 0};
+        crossing.b = {45, 80};
+        crossing.thickness = 1;
+        erased.items = {crossing, kept};
+        require(erased.eraseAlong({0, 40}, {100, 40}, 2) && erased.items == std::vector<Annotation>{kept});
+        // One contact uses drawing order and does not peel off multiple layers.
+        Annotation newest = oldStroke;
+        newest.color = rgb(1, 2, 3);
+        erased.items = {oldStroke, newest};
+        require(erased.eraseAlong({60, 40}, {60, 40}, 2) && erased.items == std::vector<Annotation>{oldStroke});
+    }
     d.begin();
     d.items.push_back(arrow);
     d.commit();
@@ -398,10 +500,41 @@ void runModelTests()
     d.items.push_back(pen);
     d.commit();
     require(!d.canRedo());
+    const auto beforeCrop = d.items;
+    d.begin();
+    d.cropBounds = Rect{10, 20, 110, 120};
+    for (auto &item : d.items) item.move({-10, -20});
+    const auto afterCrop = d.items;
+    d.commit();
+    require(d.undo() && !d.cropBounds && d.items == beforeCrop);
+    require(d.redo() && d.cropBounds == Rect{10, 20, 110, 120} && d.items == afterCrop);
+    d.begin();
+    d.cropBounds = Rect{20, 30, 50, 70};
+    d.cancel();
+    require(d.cropBounds == Rect{10, 20, 110, 120});
+    d.clear();
+    require(!d.cropBounds && !d.canUndo());
     View v{.375f, {-1440, 220}};
     Point p{230, 1024};
     Point q = v.toImage(v.toScreen(p));
     require(length(q - p) < .001f);
+    const Rect viewport{20, 100, 1020, 600}, content{-20, -20, 2020, 1520};
+    v.fitTo(viewport, content, 1);
+    require(std::abs(v.scale - 500.0f / 1540) < .00001f);
+    require(length(v.toScreen({1000, 750}) - Point{520, 350}) < .001f);
+    v.zoomAt({520, 350}, 2, viewport, content);
+    const Point anchor{420, 300};
+    const auto focus = v.toImage(anchor);
+    v.zoomAt(anchor, 3, viewport, content);
+    require(length(v.toImage(anchor) - focus) < .001f);
+    v.origin = {100000, -100000};
+    v.constrain(viewport, content);
+    require(length(v.origin - Point{80, -3960}) < .001f);
+    v.scale = .1f;
+    v.constrain(viewport, content);
+    require(length(v.toScreen({1000, 750}) - Point{520, 350}) < .001f);
+    v.fitTo(viewport, {0, 0, 100, 80}, .5f);
+    require(v.scale == .5f); // Small snips stay at native size at the fitted minimum.
     auto bitmap = Bitmap::create(8, 6);
     for (size_t i = 0; i < bitmap.pixels.size(); ++i)
         bitmap.pixels[i] = static_cast<uint8_t>(i);

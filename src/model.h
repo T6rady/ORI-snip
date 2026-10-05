@@ -32,6 +32,7 @@ inline float length(Point a)
 struct Rect
 {
     float left = 0, top = 0, right = 0, bottom = 0;
+    bool operator==(const Rect &) const = default;
     float width() const { return right - left; }
     float height() const { return bottom - top; }
     bool contains(Point p, float margin = 0) const
@@ -84,6 +85,8 @@ class Document
 {
   public:
     std::vector<Annotation> items;
+    // Bounds in the original screenshot; history keeps coordinates, never image copies.
+    std::optional<Rect> cropBounds;
     int selected = -1;
     void begin();
     void commit();
@@ -94,10 +97,15 @@ class Document
     bool canRedo() const { return !redo_.empty(); }
     bool editing() const { return pending_.has_value(); }
     int hit(Point point, float tolerance) const;
+    bool eraseAlong(Point from, Point to, float tolerance);
     void clear();
 
   private:
-    using State = std::vector<Annotation>;
+    struct State
+    {
+        std::vector<Annotation> items;
+        std::optional<Rect> cropBounds;
+    };
     std::optional<State> pending_;
     std::vector<State> undo_, redo_;
 };
@@ -116,6 +124,10 @@ struct View
     Point origin;
     Point toImage(Point screen) const { return (screen - origin) * (1 / scale); }
     Point toScreen(Point image) const { return origin + image * scale; }
+    static float fittedScale(Rect viewport, Rect content, float nativeScale);
+    void fitTo(Rect viewport, Rect content, float nativeScale);
+    void constrain(Rect viewport, Rect content);
+    void zoomAt(Point pointer, float nextScale, Rect viewport, Rect content);
 };
 float segmentDistance(Point p, Point a, Point b);
 // Convex footprint of a fixed, slanted chisel nib swept between two points.

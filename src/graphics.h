@@ -84,7 +84,7 @@ class Graphics
     Bitmap samtecBadge(uint8_t style, int logoHeight = 48, bool lightWatermark = false);
     void test();
 };
-Bitmap captureDesktop(int x, int y, int width, int height);
+Bitmap captureDesktop(int x, int y, int width, int height, bool includeCursor = false);
 void saveBytes(const std::wstring &path, const std::vector<uint8_t> &bytes);
 bool copyBitmap(HWND owner, const Bitmap &bitmap, const std::vector<uint8_t> &png);
 } // namespace snip

@@ -6,27 +6,74 @@ Click New snip, drag an area, and release. Pen is selected automatically.
 Ctrl+C copies the image with all annotations. Capturing never automatically copies.
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 
-Pen: draw with different widths and colors.
-Circle/Arrow: drag to create; choose a color.
-Use the small arrow beside Circle, Arrow, Check, and Line to choose a style.
-Arrows: classic, outlined with a black border, curved gloss, or straight gloss.
+Pen: draw with different widths and colors; the cursor previews the brush size and color.
+Hold the size + or - button to quickly adjust brush or font size. Move off to pause; release to stop.
+Text: press T, click the image, and type. Size, B (bold), Box, and colors are in the toolbar.
+The typing field fits the text and shows the screenshot behind plain text, without an input bar.
+Text uses Bahnschrift, a clean modern typeface, with Segoe UI fallback if unavailable.
+Enter adds a line. Ctrl+Enter or clicking elsewhere finishes and returns to Select.
+Esc cancels. Select Text again to add another annotation; double-click text to edit it again.
+Select text to move it or drag its corners to scale it. Text edits support undo/redo.
+Eyedropper: click the pipette beside the colors (or press I), then click the image.
+It samples screenshot/annotation colors and can recolor a selected object. Esc cancels.
+Shapes: circles and squares share a menu with large visual style previews.
+Choose square, rounded square, highlight box, filled box, or one of the circle styles.
+Drag to create; hold Shift for a perfect circle/square. O repeats the last shape; R selects rectangle.
+Use the small arrow beside Shapes, Arrow, Check, and Line to choose a visual style.
+Arrows: classic, outlined with a black border, curved gloss, straight gloss, or block gloss.
+Block gloss has a wide straight shaft, square tail, triangular head, black border, and highlight.
 Line: solid, dashed, or dotted. Hold Shift to snap its angle; L selects Line.
 Check: click to place a green boxed check or drag to size it.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
-Draw and Shapes have separate toolbar groups, with shapes aligned to the right.
+Select/Pen/Text and Shapes have separate toolbar groups, with shapes aligned to the right.
 Undo/redo sits beside New snip. Hover for hints and shortcuts.
 Color, stroke width, and zoom sit in their own row. Copy confirms with "Copied!".
+A successful Copy or Ctrl+C also briefly flashes the image, fading out in 280 ms.
+The flash stays in the editor and never appears in copied or saved pixels.
+Use the small chevron at the far right of any toolbar row to collapse/expand it.
+Collapsed rows keep a slim labeled strip; the View menu can toggle them too.
+All three rows start expanded. Collapsed rows are remembered on close/exit.
+Ctrl+mouse wheel zooms; visible scrollbars let you pan at 100% or larger sizes.
+Center in the bottom bar recenters without changing zoom. A Center image button
+also appears in empty workspace after zooming/panning, without covering the snip.
+F11 or the full-screen button beside Undo/Redo opens a full-screen screenshot view.
+F11, Esc, or Exit full screen returns to the previous window and toolbar layout.
+Full screen retains Fit, 100%, and Center in a slim bottom strip.
 Each tool remembers its own last color and style, including after File > Exit.
+Text also remembers font size, bold, and the rounded Box setting.
 Preferences save on close/exit only. New captures still start with Pen.
 
 Settings > Keyboard shortcut changes the global snipping shortcut.
 Default: Ctrl+Alt+S. Keep the app running for the global shortcut.
-Hover a menu and press the shortcut: the screen freezes before selection or save prompts.
+Hover a menu and press the shortcut: the screen freezes before selection.
+
+Settings > Save location... lets you choose the default folder for saved snips.
+Click Use this folder to remember it immediately, including after restarting.
+New Save/Save As dialogs start there; you can still choose another destination.
+Ctrl+S on an already saved snip updates its existing file.
+
+Settings > Professional Border > Enabled is optional and OFF by default.
+Turning it on enables Blur and Rounded corners; uncheck either in the submenu to use the other alone.
+It adds a soft gray halo without a hard outline and/or rounded corners to Copy and PNG Save.
+Blur adds 20 px transparent padding per side (40 px more in width/height).
+Rounded corners alone keep the original dimensions.
+The screenshot content stays at its original size without tinting or fading.
+The individual settings are remembered on close/exit and appear immediately in the image preview.
+
+Settings > Samtec Logo is optional and OFF by default.
+Its submenu shows six choices: White badge and Soft card for the S, tiger, and wordmark.
+Selecting a style enables it; uncheck Enabled to turn it off and keep that style.
+Rounded white backgrounds and soft gray halos keep the marks readable over text, dark, and white.
+The small bottom-right badge scales with the snip and works with or without Professional Border.
+Enabled and selected style are remembered on close/exit; the preview shows/hides the logo immediately.
 
 Closing the window leaves a small tray process and releases the screenshot.
+Closing, exiting, and taking a new snip happen immediately without a save prompt.
 Click the tray icon to snip. File > Exit quits entirely.
 Settings > Run at sign-in is optional and disabled by default.
 
 Keep the app in a writable folder; JackSnip.ini is created beside it when
 you save shortcut settings. Keep the accompanying runtime notices if sharing.
+
+The preview shows the same logo, blur, rounded corners, and padding as Copy and PNG Save.

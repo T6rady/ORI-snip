@@ -1,5 +1,8 @@
 #include <windows.h>
 101 ICON "snipper.ico"
+201 RCDATA "samtec-logo.png"
+202 RCDATA "samtec-tiger.png"
+203 RCDATA "samtec-wordmark.png"
 1 RT_MANIFEST "app.manifest"
 1 VERSIONINFO
  FILEVERSION 1,0,1,0

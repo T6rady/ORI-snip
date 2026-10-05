@@ -2,6 +2,7 @@
 #include <objbase.h>
 #include <cstring>
 #include <stdexcept>
+#include <array>
 
 namespace snip
 {
@@ -24,6 +25,14 @@ void Graphics::initialize()
     check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                               reinterpret_cast<IUnknown **>(textFactory.put())),
           "Cannot initialize text rendering.");
+    Com<IDWriteFontCollection> fonts;
+    check(textFactory->GetSystemFontCollection(fonts.put()), "Cannot find annotation fonts.");
+    UINT fontIndex = 0;
+    BOOL hasBahnschrift = FALSE;
+    check(fonts->FindFamilyName(L"Bahnschrift", &fontIndex, &hasBahnschrift),
+          "Cannot find annotation typeface.");
+    if (hasBahnschrift)
+        annotationFontFamily = L"Bahnschrift";
     auto makeFont = [&](Com<IDWriteTextFormat> &f, float size, DWRITE_FONT_WEIGHT weight) {
         check(textFactory->CreateTextFormat(L"Segoe UI", nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
                                             DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", f.put()),
@@ -49,13 +58,45 @@ void Graphics::initialize()
     check(factory->CreateStrokeStyle(dashed, nullptr, 0, dotStroke.put()),
           "Cannot initialize dotted strokes.");
 }
-void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotation> &items)
+Color textBackground(Color foreground)
+{
+    const unsigned brightness = (foreground & 255) * 213 +
+        ((foreground >> 8) & 255) * 715 + ((foreground >> 16) & 255) * 72;
+    return brightness > 170000 ? rgb(35, 39, 56) : rgb(255, 255, 255);
+}
+Com<IDWriteTextLayout> Graphics::textLayout(const Annotation &item)
+{
+    initialize();
+    Com<IDWriteTextFormat> format;
+    check(textFactory->CreateTextFormat(annotationFontFamily.c_str(), nullptr,
+        item.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, item.fontSize,
+        L"en-us", format.put()), "Cannot create annotation font.");
+    Com<IDWriteTextLayout> layout;
+    const std::wstring content = item.text.empty() ? L" " : item.text;
+    check(textFactory->CreateTextLayout(content.c_str(), static_cast<UINT32>(content.size()),
+        format.get(), std::max(1.0f, item.textWidth), 16384, layout.put()),
+        "Cannot lay out annotation text.");
+    return layout;
+}
+void Graphics::measureText(Annotation &item)
+{
+    auto layout = textLayout(item);
+    DWRITE_TEXT_METRICS metrics{};
+    check(layout->GetMetrics(&metrics), "Cannot measure annotation text.");
+    const float padding = item.boxed ? 12 : 0;
+    item.b = item.a + Point{std::max(1.0f, metrics.widthIncludingTrailingWhitespace) + padding * 2,
+                            metrics.height + padding * 2};
+}
+void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotation> &items,
+                               int editingText)
 {
     Com<ID2D1SolidColorBrush> brush;
     check(rt->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), brush.put()),
           "Cannot create drawing brush.");
-    for (const auto &item : items)
+    for (size_t index = 0; index < items.size(); ++index)
     {
+        const auto &item = items[index];
         brush->SetColor(color(item.color));
         float width = item.thickness;
         auto r = item.bounds();
@@ -65,6 +106,38 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
         };
         switch (item.kind)
         {
+        case Tool::Text:
+        {
+            if (item.text.empty() && static_cast<int>(index) != editingText)
+                break;
+            const float padding = item.boxed ? 12 : 0;
+            if (item.boxed)
+            {
+                auto box = D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, 10, 10);
+                brush->SetColor(color(textBackground(item.color)));
+                rt->FillRoundedRectangle(box, brush.get());
+                brush->SetColor(color(item.color));
+                rt->DrawRoundedRectangle(box, brush.get(), 2);
+            }
+            if (static_cast<int>(index) == editingText)
+                break; // The native inline editor supplies the glyphs and caret.
+            auto layout = textLayout(item);
+            rt->DrawTextLayout({item.a.x + padding, item.a.y + padding}, layout.get(), brush.get());
+            break;
+        }
+        case Tool::Rectangle:
+        {
+            const float radius = item.style == 0 ? 0 : std::min({12.0f, r.width() / 4, r.height() / 4});
+            auto box = D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, radius, radius);
+            if (item.style >= 2)
+            {
+                brush->SetColor(color(item.color, item.style == 2 ? .18f : 1.0f));
+                rt->FillRoundedRectangle(box, brush.get());
+                brush->SetColor(color(item.color));
+            }
+            rt->DrawRoundedRectangle(box, brush.get(), width, roundStroke.get());
+            break;
+        }
         case Tool::Pen:
             if (item.points.size() == 1)
                 rt->FillEllipse(
@@ -118,8 +191,8 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
                 rt->FillGeometry(path.get(), brush.get());
                 brush->SetColor(color(rgb(12, 12, 16)));
                 rt->DrawGeometry(path.get(), brush.get(), std::min(len * .06f, std::max(1.2f, width * .45f)),
-                                 roundStroke.get());
-                if (item.style == 2 || item.style == 3)
+                                 item.style == 4 ? nullptr : roundStroke.get());
+                if (item.style == 2 || item.style == 3 || item.style == 4)
                 {
                     const Color c = item.color;
                     brush->SetColor(color(rgb((c & 255) / 2 + 127, ((c >> 8) & 255) / 2 + 127,
@@ -182,7 +255,7 @@ static Com<IWICImagingFactory> wicFactory()
           "Cannot initialize Windows image encoding.");
     return wic;
 }
-Bitmap Graphics::flatten(const Bitmap &image, const std::vector<Annotation> &items)
+Bitmap Graphics::flatten(const Bitmap &image, const std::vector<Annotation> &items, int editingText)
 {
     if (image.empty())
         throw std::runtime_error("Take a snip first.");
@@ -214,12 +287,272 @@ Bitmap Graphics::flatten(const Bitmap &image, const std::vector<Annotation> &ite
         base.get(),
         D2D1::RectF(0, 0, static_cast<float>(image.width), static_cast<float>(image.height)), 1,
         D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
-    drawAnnotations(rt.get(), items);
+    drawAnnotations(rt.get(), items, editingText);
     check(rt->EndDraw(), "Cannot render annotations.");
     Bitmap result = Bitmap::create(image.width, image.height);
     check(bitmap->CopyPixels(nullptr, image.width * 4, static_cast<UINT>(result.pixels.size()),
                              result.pixels.data()),
           "Cannot read exported image.");
+    return result;
+}
+const Bitmap &Graphics::samtecLogo(int mark)
+{
+    auto &cached = samtecLogos_.at(mark);
+    if (!cached.empty())
+        return cached;
+    const HMODULE module = GetModuleHandleW(nullptr);
+    const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(201 + mark), RT_RCDATA);
+    const DWORD size = resource ? SizeofResource(module, resource) : 0;
+    const HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
+    const auto bytes = memory ? static_cast<const uint8_t *>(LockResource(memory)) : nullptr;
+    if (!bytes || !size)
+        throw std::runtime_error("Cannot load the embedded Samtec logo.");
+    const auto decoded = decode(std::vector<uint8_t>(bytes, bytes + size));
+    // Ignore transparent margins in the master asset when determining watermark size.
+    int left = decoded.width, top = decoded.height, right = 0, bottom = 0;
+    for (int y = 0; y < decoded.height; ++y)
+        for (int x = 0; x < decoded.width; ++x)
+            if (decoded.pixels[(static_cast<size_t>(y) * decoded.width + x) * 4 + 3] >= 8)
+            {
+                left = std::min(left, x);
+                top = std::min(top, y);
+                right = std::max(right, x + 1);
+                bottom = std::max(bottom, y + 1);
+            }
+    if (left >= right || top >= bottom)
+        throw std::runtime_error("The Samtec logo asset is empty.");
+    cached = decoded.crop(left, top, right - left, bottom - top);
+    return cached;
+}
+static void compositePixel(Bitmap &image, int x, int y, Color value, double alpha)
+{
+    if (alpha <= 0 || x < 0 || y < 0 || x >= image.width || y >= image.height)
+        return;
+    const size_t out = (static_cast<size_t>(y) * image.width + x) * 4;
+    const double previous = image.pixels[out + 3] / 255.0,
+                 finalAlpha = alpha + previous * (1 - alpha);
+    for (int c = 0; c < 3; ++c)
+    {
+        const unsigned component = (value >> ((2 - c) * 8)) & 255;
+        image.pixels[out + c] = static_cast<uint8_t>(std::lround(
+            (component * alpha + image.pixels[out + c] * previous * (1 - alpha)) / finalAlpha));
+    }
+    image.pixels[out + 3] = static_cast<uint8_t>(std::lround(finalAlpha * 255));
+}
+static Bitmap resizedTransparent(const Bitmap &image, int width, int height)
+{
+    auto premultiplied = image;
+    for (size_t i = 0; i < premultiplied.pixels.size(); i += 4)
+        for (int c = 0; c < 3; ++c)
+            premultiplied.pixels[i + c] = static_cast<uint8_t>(
+                (premultiplied.pixels[i + c] * premultiplied.pixels[i + 3] + 127) / 255);
+    auto wic = wicFactory();
+    Com<IWICBitmap> source;
+    check(wic->CreateBitmapFromMemory(image.width, image.height, GUID_WICPixelFormat32bppPBGRA,
+                                      image.width * 4,
+                                      static_cast<UINT>(premultiplied.pixels.size()),
+                                      premultiplied.pixels.data(), source.put()),
+          "Cannot read Samtec logo pixels.");
+    Com<IWICBitmapScaler> scaler;
+    check(wic->CreateBitmapScaler(scaler.put()), "Cannot scale Samtec logo.");
+    check(scaler->Initialize(source.get(), width, height, WICBitmapInterpolationModeFant),
+          "Cannot resize Samtec logo.");
+    auto scaled = Bitmap::create(width, height);
+    check(scaler->CopyPixels(nullptr, width * 4, static_cast<UINT>(scaled.pixels.size()),
+                             scaled.pixels.data()),
+          "Cannot render Samtec logo.");
+    for (size_t i = 0; i < scaled.pixels.size(); i += 4)
+        for (int c = 0; c < 3; ++c)
+            scaled.pixels[i + c] =
+                scaled.pixels[i + 3]
+                    ? static_cast<uint8_t>(
+                          std::min(255U, (scaled.pixels[i + c] * 255U + scaled.pixels[i + 3] / 2U) /
+                                             scaled.pixels[i + 3]))
+                    : 0;
+    return scaled;
+}
+Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight)
+{
+    style = style < 6 ? style : 0;
+    const int mark = style / 2;
+    const bool soft = style % 2;
+    const auto &logo = samtecLogo(mark);
+    const int height = std::clamp(logoHeight, 1, 128);
+    const int width =
+        std::max(1, static_cast<int>(std::lround(height * double(logo.width) / logo.height)));
+    const auto resized = resizedTransparent(logo, width, height);
+    const int padding = std::max(2, static_cast<int>(std::lround(height * (soft ? .26 : .18))));
+    const int halo = soft ? 9 : 6;
+    const int cardWidth = (mark == 0 ? height : width) + padding * 2;
+    const int cardHeight = height + padding * 2 + (soft ? 3 : 0);
+    const double radius = std::min(soft ? 12.0 : 7.0, cardHeight * (soft ? .25 : .15));
+    auto badge = Bitmap::create(cardWidth + halo * 2, cardHeight + halo * 2);
+    auto distance = [&](double x, double y) {
+        const double qx = std::abs(x - halo - cardWidth / 2.0) - (cardWidth / 2.0 - radius);
+        const double qy = std::abs(y - halo - cardHeight / 2.0) - (cardHeight / 2.0 - radius);
+        return std::hypot(std::max(qx, 0.0), std::max(qy, 0.0)) + std::min(std::max(qx, qy), 0.0) -
+               radius;
+    };
+    for (int y = 0; y < badge.height; ++y)
+        for (int x = 0; x < badge.width; ++x)
+        {
+            const double d = distance(x + .5, y + .5), outside = std::max(0.0, d);
+            const double sigma = soft ? 3.5 : 2.2;
+            const double shadow =
+                (soft ? .18 : .12) * std::exp(-outside * outside / (2 * sigma * sigma));
+            compositePixel(badge, x, y, rgb(85, 90, 105), shadow);
+            const double coverage = std::clamp(.5 - d, 0.0, 1.0);
+            compositePixel(badge, x, y, soft ? rgb(250, 250, 252) : rgb(255, 255, 255),
+                           coverage * .98);
+            const double border = coverage * std::clamp(d + 1.5, 0.0, 1.0) * .22;
+            compositePixel(badge, x, y, rgb(128, 128, 128), border);
+        }
+    if (soft)
+        for (int x = halo + padding; x < halo + cardWidth - padding; ++x)
+            compositePixel(badge, x, halo + cardHeight - padding / 2 - 1, rgb(248, 109, 26), .65);
+    const int left = halo + (cardWidth - width) / 2, top = halo + padding;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+        {
+            const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+            compositePixel(badge, left + x, top + y,
+                           rgb(resized.pixels[i + 2], resized.pixels[i + 1], resized.pixels[i]),
+                           resized.pixels[i + 3] / 255.0 * .94);
+        }
+    return badge;
+}
+void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
+{
+    style = style < 6 ? style : 0;
+    const int side = std::min(image.width, image.height);
+    const int margin =
+        std::min(std::max(1, static_cast<int>(std::lround(side * .025))), (side - 1) / 2);
+    const auto master = samtecBadge(style);
+    const double fraction = style < 2 ? .12 : style < 4 ? .11 : .07;
+    const int desiredHeight =
+        std::clamp(static_cast<int>(std::lround(side * (fraction + (style % 2 ? .01 : 0)))), 1,
+                   style < 4 ? 112 : 72);
+    const double scale = std::min({double(desiredHeight) / master.height,
+                                   double(image.width - margin * 2) / master.width,
+                                   double(image.height - margin * 2) / master.height});
+    const int width = std::max(1, static_cast<int>(std::lround(master.width * scale)));
+    const int height = std::max(1, static_cast<int>(std::lround(master.height * scale)));
+    const auto badge = resizedTransparent(master, width, height);
+    const int left = image.width - margin - width, top = image.height - margin - height;
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+        {
+            const size_t i = (static_cast<size_t>(y) * width + x) * 4;
+            compositePixel(image, left + x, top + y,
+                           rgb(badge.pixels[i + 2], badge.pixels[i + 1], badge.pixels[i]),
+                           badge.pixels[i + 3] / 255.0);
+        }
+}
+Bitmap Graphics::exportImage(const Bitmap &image, const std::vector<Annotation> &items,
+                             const ExportOptions &options, int editingText)
+{
+    auto content = flatten(image, items, editingText);
+    if (options.samtecLogo)
+        applySamtecLogo(content, options.samtecStyle);
+    if (!options.professionalBorder || (!options.professionalBlur && !options.professionalRounded))
+        return content;
+
+    const int padding = options.professionalBlur ? 20 : 0;
+    constexpr int blur = 16;
+    constexpr double radius = 8, spread = 1, offsetY = 2, sigma = 10;
+    // A soft neutral halo without a hard outline; fully covered screenshot pixels
+    // remain byte-for-byte unchanged. Rounding alone needs no extra padding.
+    constexpr double shadowOpacity = .48;
+    const double left = padding, top = padding;
+    const double right = left + content.width, bottom = top + content.height;
+    const double corner = options.professionalRounded
+                              ? std::min({radius, content.width / 2.0, content.height / 2.0})
+                              : 0;
+    auto result = Bitmap::create(content.width + padding * 2, content.height + padding * 2);
+
+    // A truncated separable Gaussian. Integrating horizontal row spans means only the
+    // visible halo needs convolution, without full-image floating-point scratch buffers.
+    std::array<double, blur * 2 + 1> kernel{};
+    std::array<double, blur * 2 + 2> cumulative{};
+    double sum = 0;
+    for (int i = -blur; i <= blur; ++i)
+        sum += kernel[i + blur] = std::exp(-i * i / (2 * sigma * sigma));
+    for (size_t i = 0; i < kernel.size(); ++i)
+    {
+        kernel[i] /= sum;
+        cumulative[i + 1] = cumulative[i] + kernel[i];
+    }
+    auto integral = [&](double coordinate) {
+        const double index = coordinate + blur + .5;
+        if (index <= 0)
+            return 0.0;
+        if (index >= kernel.size())
+            return 1.0;
+        const size_t i = static_cast<size_t>(index);
+        return cumulative[i] + (index - i) * kernel[i];
+    };
+    auto coverage = [&](double x, double y, double expansion) {
+        const double r = corner + expansion;
+        const double dx = std::abs(x - (left + right) / 2) - (content.width / 2.0 + expansion - r);
+        const double dy = std::abs(y - (top + bottom) / 2) - (content.height / 2.0 + expansion - r);
+        const double distance =
+            std::hypot(std::max(dx, 0.0), std::max(dy, 0.0)) + std::min(std::max(dx, dy), 0.0) - r;
+        return std::clamp(.5 - distance, 0.0, 1.0);
+    };
+    for (int y = 0; y < result.height; ++y)
+    {
+        std::array<double, blur * 2 + 1> rowLeft{}, rowRight{};
+        std::array<bool, blur * 2 + 1> rowVisible{};
+        for (int j = -blur; options.professionalBlur && j <= blur; ++j)
+        {
+            const double row = y + .5 - offsetY - j;
+            if (row < top - spread || row >= bottom + spread)
+                continue;
+            const double r = corner + spread;
+            const double dy = std::max({top - spread + r - row, row - (bottom + spread - r), 0.0});
+            const double inset = r - std::sqrt(std::max(0.0, r * r - dy * dy));
+            rowLeft[j + blur] = left - spread + inset;
+            rowRight[j + blur] = right + spread - inset;
+            rowVisible[j + blur] = true;
+        }
+        for (int x = 0; x < result.width; ++x)
+        {
+            const size_t out = (static_cast<size_t>(y) * result.width + x) * 4;
+            const double inside = coverage(x + .5, y + .5, 0);
+            const uint8_t *pixel = nullptr;
+            if (x >= padding && x < padding + content.width && y >= padding &&
+                y < padding + content.height)
+                pixel =
+                    &content
+                         .pixels[(static_cast<size_t>(y - padding) * content.width + x - padding) *
+                                 4];
+            // Keep every fully covered screenshot pixel byte-for-byte unchanged.
+            if (inside == 1 && pixel && pixel[3] == 255)
+            {
+                std::memcpy(&result.pixels[out], pixel, 4);
+                continue;
+            }
+            double shadow = 0;
+            for (size_t j = 0; j < kernel.size(); ++j)
+                if (rowVisible[j])
+                    shadow += kernel[j] *
+                              (integral(rowRight[j] - x - .5) - integral(rowLeft[j] - x - .5));
+            double alpha = shadow * shadowOpacity;
+            std::array<double, 3> channels = {90 * alpha, 90 * alpha, 90 * alpha};
+            auto over = [&](const std::array<double, 3> &rgb, double opacity) {
+                for (size_t i = 0; i < channels.size(); ++i)
+                    channels[i] = rgb[i] * opacity + channels[i] * (1 - opacity);
+                alpha = opacity + alpha * (1 - opacity);
+            };
+            if (pixel)
+                over({double(pixel[0]), double(pixel[1]), double(pixel[2])},
+                     inside * pixel[3] / 255.0);
+            result.pixels[out + 3] = static_cast<uint8_t>(std::lround(alpha * 255));
+            if (result.pixels[out + 3])
+                for (size_t i = 0; i < channels.size(); ++i)
+                    result.pixels[out + i] = static_cast<uint8_t>(std::lround(channels[i] / alpha));
+        }
+    }
     return result;
 }
 std::vector<uint8_t> Graphics::png(const Bitmap &bitmap)
@@ -429,6 +762,12 @@ bool copyBitmap(HWND owner, const Bitmap &bitmap, const std::vector<uint8_t> &pn
         return false;
     }
     bool success = false;
+    // Advertise the lossless alpha-preserving format first to clipboard consumers.
+    if (pngFormat && SetClipboardData(pngFormat, hPng))
+    {
+        hPng = nullptr;
+        success = true;
+    }
     if (SetClipboardData(CF_DIBV5, hV5))
     {
         hV5 = nullptr;
@@ -437,11 +776,6 @@ bool copyBitmap(HWND owner, const Bitmap &bitmap, const std::vector<uint8_t> &pn
     if (SetClipboardData(CF_DIB, hDib))
     {
         hDib = nullptr;
-        success = true;
-    }
-    if (pngFormat && SetClipboardData(pngFormat, hPng))
-    {
-        hPng = nullptr;
         success = true;
     }
     CloseClipboard();
@@ -508,10 +842,394 @@ void Graphics::test()
     size_t old = (10 * 160 + 50) * 4, next = (30 * 160 + 50) * 4;
     if (moved.pixels[old] != 255 || moved.pixels[next] != 0 || moved.pixels[next + 2] != 255)
         throw std::runtime_error("Moved sticker export test failed.");
-    auto preview = Bitmap::create(1280, 360);
+    Annotation rectangle;
+    rectangle.kind = Tool::Rectangle;
+    rectangle.color = rgb(20, 90, 170);
+    rectangle.thickness = 4;
+    rectangle.a = {20, 20};
+    rectangle.b = {100, 90};
+    for (int style = 0; style < 4; ++style)
+    {
+        rectangle.style = static_cast<uint8_t>(style);
+        const auto shape = flatten(source, {rectangle});
+        const auto center = shape.sample({60, 55});
+        if (shape.sample({20, 55}) != rectangle.color ||
+            (style < 2 && center != rgb(255, 255, 255)) ||
+            (style == 2 && (center == rgb(255, 255, 255) || center == rectangle.color)) ||
+            (style == 3 && center != rectangle.color))
+            throw std::runtime_error("Square/rounded/highlight/filled rectangle export failed.");
+    }
+    auto textSource = Bitmap::create(640, 320);
+    for (size_t i = 0; i < textSource.pixels.size(); i += 4)
+    {
+        textSource.pixels[i] = textSource.pixels[i + 1] = textSource.pixels[i + 2] = 230;
+        textSource.pixels[i + 3] = 255;
+    }
+    Annotation text;
+    text.kind = Tool::Text;
+    text.a = {20, 20};
+    text.color = rgb(25, 50, 75);
+    text.text = L"Review this value";
+    text.fontSize = 24;
+    measureText(text);
+    const auto annotationLayout = textLayout(text);
+    UINT32 familyLength = 0;
+    check(annotationLayout->GetFontFamilyNameLength(0, &familyLength), "Cannot inspect annotation font name.");
+    std::wstring family(familyLength + 1, L'\0');
+    check(annotationLayout->GetFontFamilyName(0, family.data(), static_cast<UINT32>(family.size())),
+          "Cannot inspect annotation typeface.");
+    family.resize(family.size() - 1);
+    if (family != annotationFontFamily)
+        throw std::runtime_error("Text export did not use the default annotation typeface.");
+    const auto plainBounds = text.bounds();
+    const auto plain = flatten(textSource, {text});
+    size_t inkPixels = 0;
+    for (int y = static_cast<int>(text.a.y); y < text.b.y; ++y)
+        for (int x = static_cast<int>(text.a.x); x < text.b.x; ++x)
+            if (plain.sample({static_cast<float>(x), static_cast<float>(y)}) == text.color)
+                ++inkPixels;
+    text.bold = true;
+    measureText(text);
+    if (inkPixels < 30 || flatten(textSource, {text}).pixels == plain.pixels ||
+        text.bounds().width() < plainBounds.width())
+        throw std::runtime_error("Text rendering, font measurement, or bold export failed.");
+    text.text += L"\r\nPlease confirm before sharing";
+    text.boxed = true;
+    measureText(text);
+    const auto boxed = flatten(textSource, {text});
+    if (text.bounds().height() <= plainBounds.height() + 24 ||
+        boxed.sample({text.a.x + 15, text.b.y - 5}) != rgb(255, 255, 255) ||
+        boxed.sample({0, 0}) != textSource.sample({0, 0}) || decode(png(boxed)).pixels != boxed.pixels)
+        throw std::runtime_error("Multiline/boxed text or text PNG round trip failed.");
+    text.color = rgb(255, 255, 255);
+    if (flatten(textSource, {text}).sample({text.a.x + 15, text.b.y - 5}) != textBackground(text.color))
+        throw std::runtime_error("White boxed text lost its contrasting background.");
+    text.color = rgb(25, 50, 75);
+    rectangle.a = {420, 160};
+    rectangle.b = {605, 260};
+    rectangle.style = 1;
+    saveBytes(L"text-shape-preview.png", png(flatten(textSource, {text, rectangle})));
+    const std::vector<Annotation> borderItems = {text, rectangle};
+    const auto unstyled = flatten(textSource, borderItems);
+    const auto disabled = exportImage(textSource, borderItems);
+    const auto bordered = exportImage(textSource, borderItems, {true});
+    if (disabled.width != unstyled.width || disabled.height != unstyled.height ||
+        disabled.pixels != unstyled.pixels || bordered.width != unstyled.width + 40 ||
+        bordered.height != unstyled.height + 40)
+        throw std::runtime_error("Professional Border default or padded dimensions failed.");
+    for (int y = 0; y < unstyled.height; ++y)
+        for (int x = 0; x < unstyled.width; ++x)
+            if ((x >= 8 && x < unstyled.width - 8) || (y >= 8 && y < unstyled.height - 8))
+            {
+                const size_t src = (static_cast<size_t>(y) * unstyled.width + x) * 4;
+                const size_t dst = (static_cast<size_t>(y + 20) * bordered.width + x + 20) * 4;
+                if (std::memcmp(&unstyled.pixels[src], &bordered.pixels[dst], 4))
+                    throw std::runtime_error(
+                        "Professional Border altered screenshot content pixels.");
+            }
+    auto alphaAt = [&](int x, int y) {
+        return bordered.pixels[(static_cast<size_t>(y) * bordered.width + x) * 4 + 3];
+    };
+    const int middle = bordered.width / 2;
+    if (alphaAt(20, 20) >= 255 || alphaAt(middle, 20) != 255 || alphaAt(middle, 19) < 30 ||
+        alphaAt(middle, 19) > 80 || alphaAt(middle, 19) - alphaAt(middle, 18) > 8 ||
+        alphaAt(middle, 18) <= alphaAt(middle, 12) || !alphaAt(middle, 12) || alphaAt(middle, 3))
+        throw std::runtime_error("Professional Border rounding or smooth halo falloff failed.");
+    size_t haloPixels = 0;
+    for (int y = 0; y < bordered.height; ++y)
+        for (int x = 0; x < bordered.width; ++x)
+        {
+            const size_t i = (static_cast<size_t>(y) * bordered.width + x) * 4;
+            if ((x == 0 || y == 0 || x == bordered.width - 1 || y == bordered.height - 1) &&
+                bordered.pixels[i + 3])
+                throw std::runtime_error(
+                    "Professional Border halo was clipped at the padding edge.");
+            if (x < 18 || y < 18 || x >= bordered.width - 18 || y >= bordered.height - 18)
+            {
+                if (!bordered.pixels[i + 3])
+                    continue;
+                ++haloPixels;
+                if (bordered.pixels[i] != 90 || bordered.pixels[i + 1] != 90 ||
+                    bordered.pixels[i + 2] != 90 || bordered.pixels[i + 3] > 122)
+                    throw std::runtime_error(
+                        "Professional Border shadow is not faint neutral gray.");
+            }
+        }
+    if (haloPixels < 100 ||
+        alphaAt(18, bordered.height / 2) != alphaAt(bordered.width - 19, bordered.height / 2) ||
+        decode(png(bordered)).pixels != bordered.pixels)
+        throw std::runtime_error(
+            "Professional Border symmetry or transparent PNG round trip failed.");
+    // A visible, softened halo on both white and black backgrounds, without a bright ring.
+    // Test composited contrast rather than merely accepting nonzero alpha values.
+    const size_t halo = (static_cast<size_t>(bordered.height / 2) * bordered.width + 17) * 4;
+    const double haloAlpha = bordered.pixels[halo + 3] / 255.0;
+    const int onWhite = static_cast<int>(std::lround(90 * haloAlpha + 255 * (1 - haloAlpha)));
+    const int onBlack = static_cast<int>(std::lround(90 * haloAlpha));
+    if (255 - onWhite < 29 || onBlack < 16 || 255 - onWhite > 42 || onBlack > 24)
+        throw std::runtime_error(
+            "Professional Border halo is too faint or too strong on white/black backgrounds.");
+    const double fartherAlpha =
+        bordered.pixels[(static_cast<size_t>(bordered.height / 2) * bordered.width + 12) * 4 + 3] /
+        255.0;
+    if (std::lround(90 * fartherAlpha) < 8 || std::lround(165 * fartherAlpha) < 15)
+        throw std::runtime_error(
+            "Professional Border blur does not visibly extend beyond the edge.");
+    for (bool blurEnabled : {false, true})
+        for (bool rounded : {false, true})
+        {
+            ExportOptions options{true};
+            options.professionalBlur = blurEnabled;
+            options.professionalRounded = rounded;
+            const auto sample = exportImage(textSource, borderItems, options);
+            const int padding = blurEnabled ? 20 : 0;
+            if (sample.width != unstyled.width + padding * 2 ||
+                sample.height != unstyled.height + padding * 2 ||
+                decode(png(sample)).pixels != sample.pixels)
+                throw std::runtime_error(
+                    "Independent Professional Border dimensions or PNG export failed.");
+            if (!blurEnabled && !rounded && sample.pixels != unstyled.pixels)
+                throw std::runtime_error(
+                    "Disabling both professional effects changed the screenshot.");
+            const size_t cornerPixel = (static_cast<size_t>(padding) * sample.width + padding) * 4;
+            if (rounded ? sample.pixels[cornerPixel + 3] >= 255
+                        : std::memcmp(&sample.pixels[cornerPixel], unstyled.pixels.data(), 4) != 0)
+                throw std::runtime_error("Rounded corners did not toggle independently of blur.");
+            for (int y = 0; y < unstyled.height; ++y)
+                for (int x = 0; x < unstyled.width; ++x)
+                    if (!rounded || (x >= 8 && x < unstyled.width - 8) ||
+                        (y >= 8 && y < unstyled.height - 8))
+                    {
+                        const size_t src = (static_cast<size_t>(y) * unstyled.width + x) * 4;
+                        const size_t dst =
+                            (static_cast<size_t>(y + padding) * sample.width + x + padding) * 4;
+                        if (std::memcmp(&unstyled.pixels[src], &sample.pixels[dst], 4))
+                            throw std::runtime_error(
+                                "A professional effect combination altered screenshot content.");
+                    }
+            options.professionalBorder = false;
+            if (exportImage(textSource, borderItems, options).pixels != unstyled.pixels)
+                throw std::runtime_error(
+                    "The professional master toggle did not disable both effects.");
+        }
+    for (const auto &size : {std::pair{1, 1}, std::pair{3, 24}, std::pair{24, 3}})
+    {
+        auto tiny = Bitmap::create(size.first, size.second);
+        std::fill(tiny.pixels.begin(), tiny.pixels.end(), 255);
+        const auto exported = exportImage(tiny, {}, {true});
+        if (exported.width != tiny.width + 40 || exported.height != tiny.height + 40 ||
+            decode(png(exported)).pixels != exported.pixels)
+            throw std::runtime_error("Professional Border failed on a narrow or one-pixel snip.");
+    }
+    saveBytes(L"professional-border.png", png(bordered));
+    // Compare OFF (top) and ON (bottom) against both email background extremes.
+    auto makeBorderPreview = [&](const Bitmap &unstyled, const Bitmap &bordered,
+                                 const wchar_t *path) {
+        auto borderPreview = Bitmap::create(bordered.width * 2 + 40, bordered.height * 2 + 100);
+        for (int y = 0; y < borderPreview.height; ++y)
+            for (int x = 0; x < borderPreview.width; ++x)
+            {
+                const size_t i = (static_cast<size_t>(y) * borderPreview.width + x) * 4;
+                const uint8_t background = x < borderPreview.width / 2 ? 255 : 0;
+                borderPreview.pixels[i] = borderPreview.pixels[i + 1] = borderPreview.pixels[i + 2] = background;
+                borderPreview.pixels[i + 3] = 255;
+            }
+        std::vector<Annotation> labels;
+        for (int column = 0; column < 2; ++column)
+            for (int row = 0; row < 2; ++row)
+            {
+                const Bitmap &sample = row ? bordered : unstyled;
+                const int dx = 10 + column * (bordered.width + 20) + (row ? 0 : 20);
+                const int dy = 45 + row * (bordered.height + 50) + (row ? 0 : 20);
+                for (int y = 0; y < sample.height; ++y)
+                    for (int x = 0; x < sample.width; ++x)
+                    {
+                        const size_t src = (static_cast<size_t>(y) * sample.width + x) * 4;
+                        const size_t dst = (static_cast<size_t>(y + dy) * borderPreview.width + x + dx) * 4;
+                        const double opacity = sample.pixels[src + 3] / 255.0;
+                        for (int c = 0; c < 3; ++c)
+                            borderPreview.pixels[dst + c] = static_cast<uint8_t>(std::lround(
+                                sample.pixels[src + c] * opacity + borderPreview.pixels[dst + c] * (1 - opacity)));
+                    }
+                Annotation label;
+                label.kind = Tool::Text;
+                label.fontSize = 16;
+                label.bold = true;
+                label.color = column ? rgb(235, 235, 235) : rgb(35, 39, 56);
+                label.a = {float(30 + column * (bordered.width + 20)),
+                           float(15 + row * (bordered.height + 50))};
+                label.text = row ? L"Professional Border ON" : L"Professional Border OFF";
+                measureText(label);
+                labels.push_back(label);
+            }
+        saveBytes(path, png(flatten(borderPreview, labels)));
+    };
+    makeBorderPreview(unstyled, bordered, L"professional-border-preview.png");
+    auto darkSource = textSource;
+    for (size_t i = 0; i < darkSource.pixels.size(); i += 4)
+        darkSource.pixels[i] = darkSource.pixels[i + 1] = darkSource.pixels[i + 2] = 35;
+    Annotation lightText = text;
+    lightText.color = rgb(235, 235, 235);
+    lightText.boxed = false;
+    measureText(lightText);
+    const std::vector<Annotation> darkItems = {lightText, rectangle};
+    const auto darkPlain = exportImage(darkSource, darkItems);
+    const auto darkBordered = exportImage(darkSource, darkItems, {true});
+    makeBorderPreview(darkPlain, darkBordered, L"professional-border-dark-preview.png");
+    const auto &logo = samtecLogo();
+    auto logoPixel = [&](double x, double y) {
+        return &logo.pixels[(static_cast<size_t>(y * (logo.height - 1)) * logo.width +
+                            static_cast<int>(x * (logo.width - 1))) * 4];
+    };
+    const auto bar = logoPixel(.5, .07), orange = logoPixel(.5, .52);
+    if (logo.height < logo.width * 1.4 || logo.height > logo.width * 1.8 ||
+        logoPixel(.75, .385)[3] > 5 || logoPixel(.25, .59)[3] > 5 ||
+        bar[3] < 240 || bar[0] > 10 || bar[1] > 10 || bar[2] > 10 ||
+        orange[3] < 240 || orange[2] < 220 || orange[1] < 60 || orange[1] > 150 || orange[0] > 65)
+        throw std::runtime_error("Samtec logo lost its transparent cutouts, black bars, orange fill, or proportions.");
+    saveBytes(L"samtec-logo-transparent.png", png(logo));
+    size_t previousChanged = 0;
+    for (int side : {40, 160, 640})
+    {
+        auto screenshot = Bitmap::create(side, side);
+        std::fill(screenshot.pixels.begin(), screenshot.pixels.end(), 255);
+        const auto branded = exportImage(screenshot, {}, {false, true});
+        const auto disabledLogo = exportImage(screenshot, {}, {false, false});
+        size_t changed = 0;
+        for (int y = 0; y < side; ++y)
+            for (int x = 0; x < side; ++x)
+            {
+                const size_t i = (static_cast<size_t>(y) * side + x) * 4;
+                if (std::memcmp(&screenshot.pixels[i], &branded.pixels[i], 4))
+                {
+                    ++changed;
+                    if (x < side * .80 || y < side * .80 || x == side - 1 || y == side - 1 ||
+                        branded.pixels[i + 3] != 255 || branded.pixels[i + 2] < 8)
+                        throw std::runtime_error("Samtec watermark was misplaced, opaque, or changed image alpha.");
+                }
+            }
+        if (branded.width != side || branded.height != side || changed <= previousChanged ||
+            disabledLogo.pixels != screenshot.pixels || decode(png(branded)).pixels != branded.pixels)
+            throw std::runtime_error("Samtec watermark default, scaling, dimensions, or PNG round trip failed.");
+        previousChanged = changed;
+    }
+    auto transparentSource = Bitmap::create(640, 320);
+    const auto transparentLogo = exportImage(transparentSource, {}, {false, true});
+    if (transparentLogo.pixels[3] || decode(png(transparentLogo)).pixels != transparentLogo.pixels)
+        throw std::runtime_error("Samtec watermark did not preserve transparent image pixels.");
+    const auto brandedLight = exportImage(textSource, borderItems, {false, true});
+    const auto borderedLight = exportImage(textSource, borderItems, {true, true});
+    const auto brandedDark = exportImage(darkSource, darkItems, {false, true});
+    const auto borderedDark = exportImage(darkSource, darkItems, {true, true});
+    if (brandedDark.pixels == darkPlain.pixels || decode(png(borderedDark)).pixels != borderedDark.pixels)
+        throw std::runtime_error("Samtec Logo did not work on dark screenshots with Professional Border.");
+    makeBorderPreview(brandedLight, borderedLight, L"samtec-logo-light-preview.png");
+    makeBorderPreview(brandedDark, borderedDark, L"samtec-logo-dark-preview.png");
+    saveBytes(L"samtec-logo-snippet.png", png(borderedLight));
+    for (const auto &size : {std::pair{1, 1}, std::pair{3, 24}, std::pair{24, 3}})
+    {
+        auto tiny = Bitmap::create(size.first, size.second);
+        std::fill(tiny.pixels.begin(), tiny.pixels.end(), 255);
+        const auto exported = exportImage(tiny, {}, {true, true});
+        if (exported.width != tiny.width + 40 || exported.height != tiny.height + 40 ||
+            decode(png(exported)).pixels != exported.pixels)
+            throw std::runtime_error("Samtec Logo failed on a narrow or one-pixel snip.");
+    }
+    for (int mark : {1, 2})
+    {
+        const auto &asset = samtecLogo(mark);
+        size_t transparent = 0;
+        for (size_t i = 3; i < asset.pixels.size(); i += 4)
+            transparent += asset.pixels[i] <= 5;
+        if (transparent < static_cast<size_t>(asset.width * asset.height) / 10 || asset.width <= asset.height)
+            throw std::runtime_error("Tiger or wordmark lost its transparent cutouts or proportions.");
+        saveBytes(mark == 1 ? L"samtec-tiger-transparent.png" : L"samtec-wordmark-transparent.png", png(asset));
+    }
+    auto stylesPreview = Bitmap::create(1680, 1920);
+    std::fill(stylesPreview.pixels.begin(), stylesPreview.pixels.end(), 255);
+    std::vector<Annotation> previewLabels;
+    const wchar_t *names[] = {L"S - White badge", L"S - Soft card", L"Tiger - White badge",
+        L"Tiger - Soft card", L"Wordmark - White badge", L"Wordmark - Soft card"};
+    for (uint8_t style = 0; style < 6; ++style)
+    {
+        const auto badge = samtecBadge(style);
+        if (badge.pixels[3] > 8 || badge.width <= 0 || badge.height <= 0)
+            throw std::runtime_error("Logo badge lacks transparent padding for its halo.");
+        saveBytes(L"samtec-style-" + std::to_wstring(style + 1) + L".png", png(badge));
+        for (int background = 0; background < 3; ++background)
+        {
+            auto source = Bitmap::create(520, 240);
+            for (size_t i = 0; i < source.pixels.size(); i += 4)
+            {
+                source.pixels[i] = source.pixels[i + 1] = source.pixels[i + 2] = background == 1 ? 24 : 255;
+                source.pixels[i + 3] = 255;
+            }
+            std::vector<Annotation> text;
+            Annotation heading;
+            heading.kind = Tool::Text;
+            heading.a = {16, 18};
+            heading.text = L"Quarterly review";
+            heading.bold = true;
+            heading.fontSize = 20;
+            heading.color = background == 1 ? rgb(240, 240, 245) : rgb(35, 39, 56);
+            measureText(heading);
+            text.push_back(heading);
+            if (background == 2)
+                for (int row = 0; row < 8; ++row)
+                {
+                    auto line = heading;
+                    line.a = {16, 60.0f + row * 23};
+                    line.bold = false;
+                    line.fontSize = 14;
+                    line.text = L"Review the attached figures and confirm these details for approval.";
+                    measureText(line);
+                    text.push_back(line);
+                }
+            const auto plain = flatten(source, text);
+            const auto rendered = exportImage(source, text, {false, true, style});
+            const auto bordered = exportImage(source, text, {true, true, style});
+            if (rendered.width != source.width || rendered.height != source.height ||
+                rendered.pixels == plain.pixels || decode(png(rendered)).pixels != rendered.pixels ||
+                decode(png(bordered)).pixels != bordered.pixels ||
+                exportImage(source, text, {false, false, style}).pixels != plain.pixels)
+                throw std::runtime_error("A Samtec style failed export, border, disabled, or PNG consistency.");
+            for (int y = 0; y < source.height; ++y)
+                for (int x = 0; x < source.width; ++x)
+                {
+                    const size_t i = (static_cast<size_t>(y) * source.width + x) * 4;
+                    if (std::memcmp(plain.pixels.data() + i, rendered.pixels.data() + i, 4) &&
+                        (x < source.width * .65 || y < source.height * .78 || rendered.pixels[i + 3] != 255))
+                        throw std::runtime_error("Samtec badge changed pixels outside its bottom-right area.");
+                }
+            const int left = background * 560 + 20, top = style * 320 + 60;
+            for (int y = 0; y < bordered.height; ++y)
+                for (int x = 0; x < bordered.width; ++x)
+                {
+                    const size_t i = (static_cast<size_t>(y) * bordered.width + x) * 4;
+                    compositePixel(stylesPreview, left + x, top + y,
+                        rgb(bordered.pixels[i + 2], bordered.pixels[i + 1], bordered.pixels[i]), bordered.pixels[i + 3] / 255.0);
+                }
+            Annotation label = heading;
+            label.a = {float(left), float(top - 42)};
+            label.text = std::wstring(names[style]) + (background == 0 ? L" / White" : background == 1 ? L" / Dark" : L" / Text");
+            label.color = rgb(35, 39, 56);
+            label.fontSize = 17;
+            measureText(label);
+            previewLabels.push_back(label);
+        }
+        for (const auto &size : {std::pair{1, 1}, std::pair{3, 24}, std::pair{24, 3}})
+        {
+            const auto source = Bitmap::create(size.first, size.second);
+            const auto tiny = exportImage(source, {}, {true, true, style});
+            if (decode(png(tiny)).pixels != tiny.pixels)
+                throw std::runtime_error("A Samtec style failed on a tiny transparent snip.");
+        }
+    }
+    saveBytes(L"samtec-styles-preview.png", png(flatten(stylesPreview, previewLabels)));
+    auto preview = Bitmap::create(1600, 360);
     std::fill(preview.pixels.begin(), preview.pixels.end(), 255);
     std::vector<Annotation> samples;
-    for (int style = 0; style < 4; ++style)
+    for (int style = 0; style < 5; ++style)
     {
         Annotation sample;
         sample.kind = Tool::Arrow;
@@ -574,7 +1292,7 @@ void Graphics::test()
     if (rendered.pixels[shinePixel + 2] < 200 || rendered.pixels[shinePixel] < 80 ||
         rendered.pixels[shinePixel] > 200)
         throw std::runtime_error("Straight gloss arrow lost its highlight.");
-    const Annotation &gloss = samples.back();
+    const Annotation &gloss = samples[samples.size() - 2];
     if (length(gloss.arrowSpine(.5f) - Point{1125, 100}) > .001f ||
         gloss.hit({1125, 140}, 0) || !gloss.hit({1125, 100}, 0))
         throw std::runtime_error("Straight gloss arrow geometry or selection failed.");
@@ -590,6 +1308,32 @@ void Graphics::test()
         }
     if (glossBorder < 10 || glossFill < 40 || decode(png(rendered)).pixels != rendered.pixels)
         throw std::runtime_error("Straight gloss arrow border/fill or PNG round trip failed.");
+    const Annotation &block = samples.back();
+    // Near the tail, the block's wide shaft is filled where the tapered style is empty.
+    const Point tailInside{1345, 92}, tailOutside{1330, 100};
+    if (!block.hit(tailInside, 0) || block.hit(tailOutside, 0) ||
+        rendered.sample(tailInside) != block.color ||
+        length(block.arrowSpine(.5f) - Point{1445, 100}) > .001f)
+        throw std::runtime_error("Block gloss arrow shaft, flat tail, or hit testing failed.");
+    const size_t blockHighlight = (static_cast<size_t>(100) * rendered.width + 1445) * 4;
+    const auto tailBorder = rendered.sample({1340, 92});
+    if (!tailBorder || (*tailBorder & 255) > 40 ||
+        rendered.pixels[blockHighlight + 2] < 200 || rendered.pixels[blockHighlight] < 80 ||
+        rendered.pixels[blockHighlight] > 200)
+        throw std::runtime_error("Block gloss arrow lost its square outline or highlight.");
+    Annotation rotated = block;
+    rotated.a = {80, 80};
+    rotated.b = {20, 200};
+    if (!rotated.hit(rotated.arrowSpine(.3f), 0) ||
+        rotated.hit(rotated.a - (rotated.b - rotated.a) * .1f, 0))
+        throw std::runtime_error("Rotated block gloss arrow selection failed.");
+    for (float distance : {0.0f, 1.0f, 8.0f})
+    {
+        rotated.b = rotated.a + Point{distance, 0};
+        const auto tinyArrow = flatten(source, {rotated});
+        if (decode(png(tinyArrow)).pixels != tinyArrow.pixels)
+            throw std::runtime_error("Tiny block gloss arrow export failed.");
+    }
     saveBytes(L"annotation-style-preview.png", png(rendered));
 }
 } // namespace snip

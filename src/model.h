@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace snip
@@ -10,6 +11,7 @@ namespace snip
 struct Point
 {
     float x = 0, y = 0;
+    bool operator==(const Point &) const = default;
 };
 inline Point operator+(Point a, Point b)
 {
@@ -49,7 +51,9 @@ enum class Tool
     Circle,
     Arrow,
     Check,
-    Line
+    Line,
+    Rectangle,
+    Text
 };
 using Color = uint32_t;
 constexpr Color rgb(unsigned r, unsigned g, unsigned b)
@@ -64,6 +68,10 @@ struct Annotation
     uint8_t style = 0;
     Point a, b;
     std::vector<Point> points;
+    std::wstring text;
+    float fontSize = 24, textWidth = 600;
+    bool bold = false, boxed = false;
+    bool operator==(const Annotation &) const = default;
     Point arrowSpine(float fraction) const;
     std::vector<Point> arrowContour() const;
     Rect bounds() const;
@@ -95,10 +103,11 @@ class Document
 struct Bitmap
 {
     int width = 0, height = 0;
-    std::vector<uint8_t> pixels; // top-down, BGRA, opaque screenshots
+    std::vector<uint8_t> pixels; // top-down, straight-alpha BGRA; captures are opaque
     bool empty() const { return width <= 0 || height <= 0 || pixels.empty(); }
     static Bitmap create(int width, int height);
     Bitmap crop(int x, int y, int width, int height) const;
+    std::optional<Color> sample(Point point) const;
 };
 struct View
 {

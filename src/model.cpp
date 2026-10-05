@@ -37,6 +37,14 @@ std::vector<Point> Annotation::arrowContour() const
                 base - n * headHalf, base - n * half, a - n * half};
     }
     half = std::min(len * .10f, std::max(thickness * 2.2f, len * .055f));
+    if (style == 4)
+    {
+        // Broad, constant-width shaft, square tail, and a straight triangular head.
+        Point base = b - u * head;
+        float headHalf = std::max(half * 2.1f, head * .60f);
+        return {a + n * half, base + n * half, base + n * headHalf, b,
+                base - n * headHalf, base - n * half, a - n * half};
+    }
     float baseT = std::clamp(1 - head / len, .55f, .84f);
     Point base = arrowSpine(baseT), tipDirection = b - base;
     tipDirection = tipDirection * (1 / length(tipDirection));
@@ -100,6 +108,13 @@ void Annotation::move(Point d)
 }
 void Annotation::resize(Rect from, Rect to)
 {
+    if (kind == Tool::Text)
+    {
+        const float scale = std::min(to.width() / std::max(1.0f, from.width()),
+                                     to.height() / std::max(1.0f, from.height()));
+        fontSize = std::clamp(fontSize * scale, 8.0f, 144.0f);
+        textWidth = std::max(1.0f, textWidth * scale);
+    }
     auto transform = [&](Point p) -> Point {
         float x = from.width() > .001f ? (p.x - from.left) / from.width() : .5f;
         float y = from.height() > .001f ? (p.y - from.top) / from.height() : .5f;
@@ -244,6 +259,17 @@ Bitmap Bitmap::crop(int x, int y, int w, int h) const
                     static_cast<size_t>(w) * 4);
     return result;
 }
+std::optional<Color> Bitmap::sample(Point point) const
+{
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || point.x < 0 || point.y < 0 ||
+        point.x >= width || point.y >= height)
+        return std::nullopt;
+    const size_t offset = (static_cast<size_t>(point.y) * width +
+                           static_cast<size_t>(point.x)) * 4;
+    if (offset + 3 >= pixels.size())
+        return std::nullopt;
+    return rgb(pixels[offset + 2], pixels[offset + 1], pixels[offset]);
+}
 void runModelTests()
 {
     auto require = [](bool ok) {
@@ -262,6 +288,16 @@ void runModelTests()
     pen.points = {{0, 0}, {10, 20}};
     pen.resize(pen.bounds(), {10, 10, 30, 50});
     require(pen.points[1].x == 30 && pen.points[1].y == 50);
+    Annotation text;
+    text.kind = Tool::Text;
+    text.a = {10, 10};
+    text.b = {110, 40};
+    text.text = L"Work note";
+    require(text.hit({50, 20}, 0) && !text.hit({200, 80}, 0));
+    text.resize(text.bounds(), {20, 20, 220, 80});
+    require(text.fontSize == 48 && text.textWidth == 1200 && text.a.x == 20);
+    text.move({15, 25});
+    require(text.a.x == 35 && text.a.y == 45 && text.text == L"Work note");
     Document d;
     d.begin();
     d.items.push_back(arrow);
@@ -289,6 +325,10 @@ void runModelTests()
         bitmap.pixels[i] = static_cast<uint8_t>(i);
     auto cropped = bitmap.crop(2, 1, 3, 2);
     require(cropped.pixels[0] == bitmap.pixels[40] && cropped.pixels[12] == bitmap.pixels[72]);
+    require(bitmap.sample({2.9f, 1.2f}) == rgb(42, 41, 40));
+    require(bitmap.sample({7.99f, 5.99f}) == rgb(190, 189, 188));
+    require(!bitmap.sample({-0.01f, 0}) && !bitmap.sample({8, 0}) &&
+            !bitmap.sample({0, 6}) && !Bitmap{}.sample({0, 0}));
     bool rejected = false;
     try
     {

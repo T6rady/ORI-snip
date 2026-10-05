@@ -32,7 +32,7 @@ Get-Item -LiteralPath (Join-Path $taskDist $OutputName) | Select-Object FullName
 Copy-Item -LiteralPath (Join-Path $taskRoot 'resources\licenses\LLVM.txt'), (Join-Path $taskRoot 'resources\licenses\MinGW-runtime.txt') -Destination $taskDist
 if ($Test) {
     $taskClipboardArguments = @('-std=c++20','-Os','-Wall','-Wextra','-Wpedantic','-DUNICODE','-D_UNICODE','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-D_WIN32_WINNT=0x0A00',
-        '-I',(Join-Path $taskRoot 'src'),(Join-Path $taskRoot 'tests\clipboard.cpp'),(Join-Path $taskRoot 'src\model.cpp'),(Join-Path $taskRoot 'src\graphics.cpp'),
+        '-I',(Join-Path $taskRoot 'src'),(Join-Path $taskRoot 'tests\clipboard.cpp'),(Join-Path $taskRoot 'src\model.cpp'),(Join-Path $taskRoot 'src\graphics.cpp'),(Join-Path $taskBuild 'app.res.o'),
         '-o',(Join-Path $taskBuild 'clipboard_test.exe'),'-municode','-static','-s','-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32')
     & $taskCompiler @taskClipboardArguments
     if ($LASTEXITCODE -ne 0) { throw 'Clipboard test compilation failed.' }

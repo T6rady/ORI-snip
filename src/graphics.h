@@ -81,7 +81,7 @@ class Graphics
                        const ExportOptions &options = {}, int editingText = -1);
     std::vector<uint8_t> png(const Bitmap &bitmap);
     Bitmap decode(const std::vector<uint8_t> &bytes);
-    Bitmap samtecBadge(uint8_t style, int logoHeight = 48);
+    Bitmap samtecBadge(uint8_t style, int logoHeight = 48, bool lightWatermark = false);
     void test();
 };
 Bitmap captureDesktop(int x, int y, int width, int height);

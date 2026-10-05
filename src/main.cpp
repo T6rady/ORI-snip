@@ -75,12 +75,12 @@ enum Command
     TextEditControl = 1600,
     LogoStyleFirst = 1800
 };
-constexpr const wchar_t *LogoStyleNames[] = {L"S - White badge", L"S - Soft card",
-    L"Tiger - White badge", L"Tiger - Soft card", L"Wordmark - White badge", L"Wordmark - Soft card"};
+constexpr const wchar_t *LogoStyleNames[] = {L"S - White badge", L"S - Soft watermark",
+    L"Tiger - White badge", L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
 const std::array<Color, 8> Palette = {rgb(239, 68, 68),   rgb(249, 115, 22), rgb(250, 204, 21),
                                       rgb(34, 197, 94),   rgb(14, 165, 233), rgb(168, 85, 247),
                                       rgb(255, 255, 255), rgb(15, 23, 42)};
-constexpr std::array<uint8_t, 8> StyleCounts = {1, 1, 3, 5, 3, 3, 4, 1};
+constexpr std::array<uint8_t, 8> StyleCounts = {1, 1, 3, 5, 6, 3, 4, 1};
 constexpr int StyleChoiceStride = 8;
 constexpr const wchar_t *ToolNames[] = {L"Select", L"Pen", L"Circle", L"Arrow", L"Check", L"Line",
                                        L"Rectangle", L"Text"};
@@ -1035,7 +1035,7 @@ void buildButtons()
                 hint = L"Arrow (A)";
                 break;
             case CheckTool:
-                hint = L"Check sticker (K)";
+                hint = L"Check or X sticker (K); dropdown shows styles";
                 break;
             case LineTool:
                 hint = L"Line (L) - hold Shift to snap the angle";
@@ -1456,7 +1456,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
             icon.kind = button.command == CircleTool
                             ? app.geometryTool
                             : static_cast<Tool>(button.command - SelectTool);
-            icon.color = button.command == CheckTool && available ? Palette[3] : fg;
+            icon.color = button.command == CheckTool && available
+                             ? app.colors[static_cast<size_t>(Tool::Check)] : fg;
             icon.thickness = 1.7f;
             icon.style = app.styles[static_cast<size_t>(icon.kind)];
             icon.a = {r.left + 9, r.top + 10};
@@ -1617,7 +1618,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                 L"Pen: drag to draw; Ctrl+Z undoes",
                 L"Circle: drag to draw; Shift makes a circle",
                 L"Arrow: drag to draw; select and drag endpoints to turn",
-                L"Check: click to place; drag to size",
+                L"Check / X: click to place; drag to size",
                 L"Line: drag to draw; Shift snaps angle; drag endpoints to resize",
                 L"Rectangle: drag to draw; Shift makes a square",
                 L"Text: click and type; Ctrl+Enter finishes; double-click to edit"};
@@ -2614,6 +2615,9 @@ void drawShapeChoice(const DRAWITEMSTRUCT &draw)
     icon.kind = choice.tool;
     icon.style = choice.style;
     icon.color = app.colors[static_cast<size_t>(choice.tool)];
+    if (choice.tool == Tool::Check &&
+        (choice.style >= 3) != (app.styles[static_cast<size_t>(Tool::Check)] >= 3))
+        icon.color = choice.style >= 3 ? Palette[0] : Palette[3];
     icon.thickness = 2;
     icon.a = {0, 0};
     icon.b = {34, choice.tool == Tool::Check ? 34.0f : 25.0f};
@@ -2681,7 +2685,7 @@ void drawLogoChoice(const DRAWITEMSTRUCT &draw)
                      app.graphics.font.get(), {126, 13, width - 8, 37}, brush.get());
     brush->SetColor(color(Muted));
     const wchar_t *description =
-        style % 2 ? L"Soft shadow, orange accent" : L"Compact white background";
+        style % 2 ? L"Faint mark, adapts to background" : L"Compact white background";
     app.graphics.smallFont->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     target->DrawText(description, static_cast<UINT32>(wcslen(description)),
                      app.graphics.smallFont.get(), {126, 36, width - 8, 59}, brush.get());
@@ -2701,7 +2705,8 @@ void showShapeChoices(int id)
             {Tool::Arrow, 4, L"Block gloss"}};
     else if (id == CheckStyleMenu)
         choices = {{Tool::Check, 0, L"Boxed check"}, {Tool::Check, 1, L"Circle badge"},
-            {Tool::Check, 2, L"Simple check"}};
+            {Tool::Check, 2, L"Simple check"}, {Tool::Check, 3, L"Boxed X"},
+            {Tool::Check, 4, L"Circle X badge"}, {Tool::Check, 5, L"Simple X"}};
     else
         choices = {{Tool::Line, 0, L"Solid"}, {Tool::Line, 1, L"Dashed"}, {Tool::Line, 2, L"Dotted"}};
     HMENU menu = CreatePopupMenu();
@@ -2795,6 +2800,8 @@ void command(int id)
             return;
         if (app.styles[toolIndex] != style)
         {
+            if (tool == Tool::Check && (app.styles[toolIndex] >= 3) != (style >= 3))
+                app.colors[toolIndex] = style >= 3 ? Palette[0] : Palette[3];
             app.styles[toolIndex] = style;
             app.toolPreferencesDirty = true;
         }
@@ -4224,7 +4231,7 @@ class SmokeHoverPopup
 const std::array<Color, 8> PersistenceTestColors = {
     Palette[0],      rgb(12, 34, 56),  rgb(210, 87, 133), rgb(15, 120, 220),
     rgb(8, 91, 200), rgb(90, 35, 170), rgb(18, 90, 140),  rgb(25, 50, 75)};
-const std::array<uint8_t, 8> PersistenceTestStyles = {0, 0, 1, 4, 2, 1, 1, 0};
+const std::array<uint8_t, 8> PersistenceTestStyles = {0, 0, 1, 4, 5, 1, 1, 0};
 std::wstring smokeMenuPreviewPath;
 std::string smokeMenuPreviewError;
 void CALLBACK smokeShapeMenuTimer(HWND hwnd, UINT, UINT_PTR id, DWORD)
@@ -4236,6 +4243,14 @@ void CALLBACK smokeShapeMenuTimer(HWND hwnd, UINT, UINT_PTR id, DWORD)
         const bool logo = app.shapeMenu == app.logoMenu;
         const bool professional = app.shapeMenu == app.professionalMenu;
         const int count = GetMenuItemCount(app.shapeMenu);
+        if (GetMenuItemID(app.shapeMenu, 0) == static_cast<UINT>(styleCommand(Tool::Check, 0)))
+        {
+            if (count != StyleCounts[static_cast<size_t>(Tool::Check)])
+                throw std::runtime_error("Check/X menu is missing styles.");
+            for (int style = 0; style < count; ++style)
+                if (GetMenuItemID(app.shapeMenu, style) != static_cast<UINT>(styleCommand(Tool::Check, style)))
+                    throw std::runtime_error("Check/X menu command or order is incorrect.");
+        }
         if (count < 3 || !GetMenuItemRect(hwnd, app.shapeMenu, logo ? 2 : 0, &first) ||
             !GetMenuItemRect(hwnd, app.shapeMenu, count - 1, &last) ||
             first.right - first.left < (logo ? 320 : professional ? 96 : 184) * app.dpi ||
@@ -4308,7 +4323,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             testPenCursor();
             writeTestReport(L"self-test-results.txt",
                             "PASS: model history, cancellation, hit testing, resizing, coordinate "
-                            "transforms, cropping, pen/circle/arrow/check composition, "
+                            "transforms, cropping, pen/circle/arrow/check composition, six check/X styles at small and large sizes, "
                             "solid/dashed/dotted line patterns, outlined/curved/straight/block gloss arrow artwork and "
                             "selection, PNG "
                             "pixel-perfect round trip, moved annotations, image color sampling, "
@@ -4812,6 +4827,49 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 command(Undo);
                 if (app.document.items.size() != 4)
                     throw std::runtime_error("Undo deletion failed.");
+                for (int style = 3; style < 6; ++style)
+                {
+                    command(styleCommand(Tool::Check, style));
+                    dragImage({600, 120}, {600, 120});
+                    auto bounds = app.document.items.back().bounds();
+                    dragImage({bounds.right, bounds.bottom}, {bounds.right + 20, bounds.bottom + 20});
+                    bounds = app.document.items.back().bounds();
+                    dragImage({(bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2},
+                              {(bounds.left + bounds.right) / 2 - 30, (bounds.top + bounds.bottom) / 2 - 20});
+                    const auto &cross = app.document.items.back();
+                    if (cross.kind != Tool::Check || cross.style != style || cross.color != Palette[0] ||
+                        cross.bounds().width() < 70 || app.tool != Tool::Select ||
+                        !cross.hit({(cross.a.x + cross.b.x) / 2, (cross.a.y + cross.b.y) / 2}, 1))
+                        throw std::runtime_error("Red X click placement, move, resize, or selection failed.");
+                    command(DeleteSelected);
+                    command(Undo);
+                    if (app.document.items.back().style != style)
+                        throw std::runtime_error("Undo red X deletion lost its style.");
+                    command(Redo);
+                    if (app.document.items.size() != 4)
+                        throw std::runtime_error("Redo red X deletion failed.");
+                    command(styleCommand(Tool::Check, style));
+                    dragImage({450, 20}, {520, 90});
+                    if (app.document.items.back().style != style || app.document.items.back().color != Palette[0] ||
+                        std::abs(app.document.items.back().bounds().width() - 70) > 2)
+                        throw std::runtime_error("Red X drag placement failed.");
+                    command(DeleteSelected);
+                }
+                command(styleCommand(Tool::Check, 0));
+                if (activeColor() != Palette[3])
+                    throw std::runtime_error("Switching back to checks did not choose green.");
+                changeColor(Palette[4]);
+                command(styleCommand(Tool::Check, 1));
+                if (activeColor() != Palette[4])
+                    throw std::runtime_error("Changing check badge lost its custom color.");
+                command(styleCommand(Tool::Check, 3));
+                if (activeColor() != Palette[0])
+                    throw std::runtime_error("Switching to X did not choose red.");
+                changeColor(Palette[5]);
+                command(styleCommand(Tool::Check, 4));
+                if (activeColor() != Palette[5])
+                    throw std::runtime_error("Changing X badge lost its custom color.");
+                command(styleCommand(Tool::Check, 0));
                 for (int style = 0; style < 3; ++style)
                 {
                     command(styleCommand(Tool::Line, style));
@@ -5690,7 +5748,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     const Tool tool = static_cast<Tool>(i);
                     if (StyleCounts[i] > 1)
                         command(
-                            styleCommand(tool, tool == Tool::Check ? 1 : PersistenceTestStyles[i]));
+                            styleCommand(tool, tool == Tool::Check ? 4 : PersistenceTestStyles[i]));
                     else
                         selectTool(tool);
                     changeColor(PersistenceTestColors[i]);
@@ -5732,7 +5790,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     throw std::runtime_error("Text formatting or geometry group preferences were lost.");
                 // A later change must be written by the full-exit path, not the earlier close.
                 app.image = Bitmap::create(10, 10);
-                command(styleCommand(Tool::Check, 2));
+                command(styleCommand(Tool::Check, 5));
                 if (activeColor() != PersistenceTestColors[static_cast<size_t>(Tool::Check)])
                     throw std::runtime_error("Reopening a tool lost its previous custom color.");
                 app.document.items.push_back(unsaved);
@@ -5746,7 +5804,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     "visible and hidden editor, instant cancellation preserves the previous snip, "
                     "native window, Direct2D editor, live desktop capture, selection overlay "
                     "original pixels, mouse rectangle selection and cropping, mouse drawing, all "
-                    "stickers, solid/dashed/dotted lines and endpoint editing, outlined/curved "
+                    "stickers, red X click/drag/move/resize/delete/undo/redo, check/X default and custom colors, "
+                    "solid/dashed/dotted lines and endpoint editing, outlined/curved "
                     "arrows, straight and block gloss arrows, "
                     "move/resize/recolor, arrow endpoint rotation, delete, held +/- font/brush repeat, bounds, pause/resume, cancellation, single-step undo, toolbar press/release "
                     "and cancellation, mouse undo/redo, eyedropper toolbar/shortcut/cancel, "

@@ -227,19 +227,32 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             break;
         case Tool::Check: {
             float w = r.width(), h = r.height(), stroke = std::max(1.0f, std::min(w, h) * .06f);
-            if (item.style == 0)
+            const bool cross = item.style >= 3;
+            const auto badge = item.style % 3;
+            if (badge == 0)
                 rt->DrawRoundedRectangle(
                     D2D1::RoundedRect(D2D1::RectF(r.left, r.top, r.right, r.bottom), w * .12f,
                                       h * .12f),
                     brush.get(), stroke);
-            else if (item.style == 1)
+            else if (badge == 1)
                 rt->DrawEllipse(D2D1::Ellipse({(r.left + r.right) / 2, (r.top + r.bottom) / 2},
                                               w * .48f, h * .48f),
                                 brush.get(), stroke);
-            line({r.left + w * .23f, r.top + h * .52f}, {r.left + w * .43f, r.top + h * .72f},
-                 stroke * (item.style == 2 ? 1.8f : 1.4f));
-            line({r.left + w * .43f, r.top + h * .72f}, {r.left + w * .79f, r.top + h * .28f},
-                 stroke * (item.style == 2 ? 1.8f : 1.4f));
+            const float markStroke = stroke * (badge == 2 ? 1.8f : 1.4f);
+            if (cross)
+            {
+                line({r.left + w * .28f, r.top + h * .28f},
+                     {r.left + w * .72f, r.top + h * .72f}, markStroke);
+                line({r.left + w * .72f, r.top + h * .28f},
+                     {r.left + w * .28f, r.top + h * .72f}, markStroke);
+            }
+            else
+            {
+                line({r.left + w * .23f, r.top + h * .52f},
+                     {r.left + w * .43f, r.top + h * .72f}, markStroke);
+                line({r.left + w * .43f, r.top + h * .72f},
+                     {r.left + w * .79f, r.top + h * .28f}, markStroke);
+            }
             break;
         }
         default:
@@ -371,7 +384,7 @@ static Bitmap resizedTransparent(const Bitmap &image, int width, int height)
                     : 0;
     return scaled;
 }
-Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight)
+Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
 {
     style = style < 6 ? style : 0;
     const int mark = style / 2;
@@ -381,11 +394,37 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight)
     const int width =
         std::max(1, static_cast<int>(std::lround(height * double(logo.width) / logo.height)));
     const auto resized = resizedTransparent(logo, width, height);
-    const int padding = std::max(2, static_cast<int>(std::lround(height * (soft ? .26 : .18))));
-    const int halo = soft ? 9 : 6;
+    if (soft)
+    {
+        // A transparent monochrome mark with a faint opposing halo around the artwork only.
+        constexpr int halo = 3;
+        auto watermark = Bitmap::create(width + halo * 2, height + halo * 2);
+        const Color ink = lightWatermark ? rgb(238, 238, 238) : rgb(80, 80, 80);
+        const Color edge = lightWatermark ? rgb(0, 0, 0) : rgb(255, 255, 255);
+        for (int y = -halo; y < height + halo; ++y)
+            for (int x = -halo; x < width + halo; ++x)
+            {
+                const double alpha = x >= 0 && x < width && y >= 0 && y < height
+                    ? resized.pixels[(static_cast<size_t>(y) * width + x) * 4 + 3] / 255.0 : 0;
+                double glow = 0;
+                for (int dy = -2; dy <= 2; ++dy)
+                    for (int dx = -2; dx <= 2; ++dx)
+                        if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height)
+                        {
+                            const double nearby = resized.pixels[
+                                (static_cast<size_t>(y + dy) * width + x + dx) * 4 + 3] / 255.0;
+                            glow = std::max(glow, nearby * std::exp(-(dx * dx + dy * dy) / 2.0));
+                        }
+                compositePixel(watermark, x + halo, y + halo, edge, glow * (1 - alpha) * .10);
+                compositePixel(watermark, x + halo, y + halo, ink, alpha * .32);
+            }
+        return watermark;
+    }
+    const int padding = std::max(2, static_cast<int>(std::lround(height * .18)));
+    const int halo = 6;
     const int cardWidth = (mark == 0 ? height : width) + padding * 2;
-    const int cardHeight = height + padding * 2 + (soft ? 3 : 0);
-    const double radius = std::min(soft ? 12.0 : 7.0, cardHeight * (soft ? .25 : .15));
+    const int cardHeight = height + padding * 2;
+    const double radius = std::min(7.0, cardHeight * .15);
     auto badge = Bitmap::create(cardWidth + halo * 2, cardHeight + halo * 2);
     auto distance = [&](double x, double y) {
         const double qx = std::abs(x - halo - cardWidth / 2.0) - (cardWidth / 2.0 - radius);
@@ -397,19 +436,14 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight)
         for (int x = 0; x < badge.width; ++x)
         {
             const double d = distance(x + .5, y + .5), outside = std::max(0.0, d);
-            const double sigma = soft ? 3.5 : 2.2;
-            const double shadow =
-                (soft ? .18 : .12) * std::exp(-outside * outside / (2 * sigma * sigma));
+            const double sigma = 2.2;
+            const double shadow = .12 * std::exp(-outside * outside / (2 * sigma * sigma));
             compositePixel(badge, x, y, rgb(85, 90, 105), shadow);
             const double coverage = std::clamp(.5 - d, 0.0, 1.0);
-            compositePixel(badge, x, y, soft ? rgb(250, 250, 252) : rgb(255, 255, 255),
-                           coverage * .98);
+            compositePixel(badge, x, y, rgb(255, 255, 255), coverage * .98);
             const double border = coverage * std::clamp(d + 1.5, 0.0, 1.0) * .22;
             compositePixel(badge, x, y, rgb(128, 128, 128), border);
         }
-    if (soft)
-        for (int x = halo + padding; x < halo + cardWidth - padding; ++x)
-            compositePixel(badge, x, halo + cardHeight - padding / 2 - 1, rgb(248, 109, 26), .65);
     const int left = halo + (cardWidth - width) / 2, top = halo + padding;
     for (int y = 0; y < height; ++y)
         for (int x = 0; x < width; ++x)
@@ -427,18 +461,36 @@ void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
     const int side = std::min(image.width, image.height);
     const int margin =
         std::min(std::max(1, static_cast<int>(std::lround(side * .025))), (side - 1) / 2);
-    const auto master = samtecBadge(style);
-    const double fraction = style < 2 ? .12 : style < 4 ? .11 : .07;
+    auto master = samtecBadge(style);
+    const bool soft = style % 2;
+    constexpr double fractions[] = {.09, .075, .085, .07, .055, .05};
+    constexpr int maxHeights[] = {80, 64, 80, 64, 52, 44};
     const int desiredHeight =
-        std::clamp(static_cast<int>(std::lround(side * (fraction + (style % 2 ? .01 : 0)))), 1,
-                   style < 4 ? 112 : 72);
+        std::clamp(static_cast<int>(std::lround(side * fractions[style])), 1, maxHeights[style]);
     const double scale = std::min({double(desiredHeight) / master.height,
                                    double(image.width - margin * 2) / master.width,
                                    double(image.height - margin * 2) / master.height});
     const int width = std::max(1, static_cast<int>(std::lround(master.width * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(master.height * scale)));
-    const auto badge = resizedTransparent(master, width, height);
     const int left = image.width - margin - width, top = image.height - margin - height;
+    if (soft)
+    {
+        double luminance = 0;
+        int samples = 0;
+        const int step = std::max(1, std::min(width, height) / 16);
+        for (int y = top; y < top + height; y += step)
+            for (int x = left; x < left + width; x += step)
+            {
+                const size_t i = (static_cast<size_t>(y) * image.width + x) * 4;
+                const double alpha = image.pixels[i + 3] / 255.0;
+                luminance += (.2126 * image.pixels[i + 2] + .7152 * image.pixels[i + 1] +
+                              .0722 * image.pixels[i]) * alpha + 255 * (1 - alpha);
+                ++samples;
+            }
+        if (luminance / samples < 128)
+            master = samtecBadge(style, 48, true);
+    }
+    const auto badge = resizedTransparent(master, width, height);
     for (int y = 0; y < height; ++y)
         for (int x = 0; x < width; ++x)
         {
@@ -837,6 +889,45 @@ void Graphics::test()
         throw std::runtime_error("Check export pixel test failed.");
     if (!pixel(159, 119, rgb(255, 255, 255)))
         throw std::runtime_error("Image background export test failed.");
+    auto stickerPreview = Bitmap::create(720, 240);
+    std::fill(stickerPreview.pixels.begin(), stickerPreview.pixels.end(), 255);
+    std::vector<Annotation> stickers;
+    const wchar_t *stickerNames[] = {L"Boxed check", L"Circle badge", L"Simple check",
+                                    L"Boxed X", L"Circle X badge", L"Simple X"};
+    for (int style = 0; style < 6; ++style)
+    {
+        auto sticker = mark;
+        sticker.style = static_cast<uint8_t>(style);
+        sticker.color = style < 3 ? rgb(34, 197, 94) : rgb(239, 68, 68);
+        for (int side : {24, 80})
+        {
+            sticker.a = {20, 20};
+            sticker.b = {20.0f + side, 20.0f + side};
+            const auto rendered = flatten(source, {sticker});
+            const Point center{20.0f + side * .5f, 20.0f + side * .5f};
+            if ((style >= 3 && (rendered.sample(center) != sticker.color ||
+                               rendered.sample({20.0f + side * .3f, 20.0f + side * .3f}) != sticker.color ||
+                               rendered.sample({20.0f + side * .7f, 20.0f + side * .3f}) != sticker.color)) ||
+                (style < 3 && rendered.sample(center) == sticker.color) ||
+                (style % 3 == 2 && rendered.sample({20, center.y}) != rgb(255, 255, 255)) ||
+                (style % 3 != 2 && rendered.sample({20, center.y}) == rgb(255, 255, 255)) ||
+                decode(png(rendered)).pixels != rendered.pixels)
+                throw std::runtime_error("Check/X artwork, badge, size, color, or PNG round trip failed: style " +
+                                         std::to_string(style) + ", size " + std::to_string(side));
+            sticker.a = {20.0f + style * 120, side == 80 ? 40.0f : 170.0f};
+            sticker.b = sticker.a + Point{float(side), float(side)};
+            stickers.push_back(sticker);
+        }
+        Annotation label;
+        label.kind = Tool::Text;
+        label.text = stickerNames[style];
+        label.fontSize = 14;
+        label.color = rgb(35, 39, 56);
+        label.a = {10.0f + style * 120, 10};
+        measureText(label);
+        stickers.push_back(label);
+    }
+    saveBytes(L"check-x-style-preview.png", png(flatten(stickerPreview, stickers)));
     pen.move({0, 20});
     auto moved = flatten(source, {pen});
     size_t old = (10 * 160 + 50) * 4, next = (30 * 160 + 50) * 4;
@@ -1148,13 +1239,34 @@ void Graphics::test()
     auto stylesPreview = Bitmap::create(1680, 1920);
     std::fill(stylesPreview.pixels.begin(), stylesPreview.pixels.end(), 255);
     std::vector<Annotation> previewLabels;
-    const wchar_t *names[] = {L"S - White badge", L"S - Soft card", L"Tiger - White badge",
-        L"Tiger - Soft card", L"Wordmark - White badge", L"Wordmark - Soft card"};
+    const wchar_t *names[] = {L"S - White badge", L"S - Soft watermark", L"Tiger - White badge",
+        L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
     for (uint8_t style = 0; style < 6; ++style)
     {
         const auto badge = samtecBadge(style);
         if (badge.pixels[3] > 8 || badge.width <= 0 || badge.height <= 0)
             throw std::runtime_error("Logo badge lacks transparent padding for its halo.");
+        if (style % 2)
+        {
+            const auto light = samtecBadge(style, 48, true);
+            size_t visible = 0, transparent = 0;
+            for (size_t i = 0; i < badge.pixels.size(); i += 4)
+            {
+                const int alpha = badge.pixels[i + 3];
+                visible += alpha >= 40;
+                transparent += alpha == 0;
+                if (alpha > 83 || (alpha && (badge.pixels[i] != badge.pixels[i + 1] ||
+                                           badge.pixels[i] != badge.pixels[i + 2])) ||
+                    light.pixels[i + 3] != alpha)
+                    throw std::runtime_error("Soft watermark must be faint, neutral, and free of orange accents.");
+            }
+            if (visible < 30 || transparent < badge.pixels.size() / 64 ||
+                badge.width >= samtecBadge(style - 1).width ||
+                badge.height >= samtecBadge(style - 1).height)
+                throw std::runtime_error("Soft watermark lacks visible artwork, transparent cutouts, or a compact size: " +
+                                         std::to_string(style) + ", visible " + std::to_string(visible) +
+                                         ", transparent " + std::to_string(transparent));
+        }
         saveBytes(L"samtec-style-" + std::to_wstring(style + 1) + L".png", png(badge));
         for (int background = 0; background < 3; ++background)
         {
@@ -1193,6 +1305,19 @@ void Graphics::test()
                 decode(png(bordered)).pixels != bordered.pixels ||
                 exportImage(source, text, {false, false, style}).pixels != plain.pixels)
                 throw std::runtime_error("A Samtec style failed export, border, disabled, or PNG consistency.");
+            if (style % 2 && background < 2)
+            {
+                int greatestContrast = 0;
+                for (size_t i = 0; i < rendered.pixels.size(); i += 4)
+                {
+                    const int change = int(rendered.pixels[i]) - int(plain.pixels[i]);
+                    greatestContrast = std::max(greatestContrast, std::abs(change));
+                    if ((background == 0 && change < -80) || (background == 1 && change > 80))
+                        throw std::runtime_error("Soft watermark is too prominent on a plain background.");
+                }
+                if (greatestContrast < 25)
+                    throw std::runtime_error("Soft watermark is unreadable on a light or dark background.");
+            }
             for (int y = 0; y < source.height; ++y)
                 for (int x = 0; x < source.width; ++x)
                 {

@@ -23,7 +23,8 @@ Use the small arrow beside Shapes, Arrow, Check, and Line to choose a visual sty
 Arrows: classic, outlined with a black border, curved gloss, straight gloss, or block gloss.
 Block gloss has a wide straight shaft, square tail, triangular head, black border, and highlight.
 Line: solid, dashed, or dotted. Hold Shift to snap its angle; L selects Line.
-Check: click to place a green boxed check or drag to size it.
+Check: choose boxed, circle-badge, or simple green checks and red Xs from its dropdown.
+Click to place or drag to size. Switching checks/Xs picks green/red; colors can be customized.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
 Select/Pen/Text and Shapes have separate toolbar groups, with shapes aligned to the right.
@@ -62,10 +63,13 @@ The screenshot content stays at its original size without tinting or fading.
 The individual settings are remembered on close/exit and appear immediately in the image preview.
 
 Settings > Samtec Logo is optional and OFF by default.
-Its submenu shows six choices: White badge and Soft card for the S, tiger, and wordmark.
+Its submenu shows six choices: White badge and Soft watermark for the S, tiger, and wordmark.
 Selecting a style enables it; uncheck Enabled to turn it off and keep that style.
-Rounded white backgrounds and soft gray halos keep the marks readable over text, dark, and white.
-The small bottom-right badge scales with the snip and works with or without Professional Border.
+White badges have compact rounded backgrounds and soft gray halos.
+Soft watermarks are faint monochrome marks without a card or orange underline.
+They adapt to light/dark backgrounds; a subtle edge halo keeps the artwork visible.
+All logos are smaller, with the watermarks more compact than the white badges.
+The bottom-right logo scales with the snip and works with or without Professional Border.
 Enabled and selected style are remembered on close/exit; the preview shows/hides the logo immediately.
 
 Closing the window leaves a small tray process and releases the screenshot.

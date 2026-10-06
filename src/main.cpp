@@ -311,6 +311,7 @@ void refreshEditorCursor();
 void finishTextEditing(bool cancel = false, bool selectAfter = true);
 void syncTextEditor();
 void beginTextEditing(Point point, int existing = -1);
+void selectTool(Tool tool);
 void buildButtons();
 void refreshRecentThumbnail();
 void stashRecentSnip();
@@ -508,7 +509,7 @@ void loadToolPreferences()
     const UINT fontSize = GetPrivateProfileIntW(L"ToolPreferences", L"TextFontSize", 24, app.iniPath.c_str());
     app.fontSize = static_cast<float>(std::clamp(fontSize, 8U, 144U));
     app.thickness = static_cast<float>(std::clamp(
-        GetPrivateProfileIntW(L"ToolPreferences", L"StrokeWidth", 4, app.iniPath.c_str()), 1U, 40U));
+        GetPrivateProfileIntW(L"ToolPreferences", L"StrokeWidth", 4, app.iniPath.c_str()), 1U, 100U));
     app.highlightWidth = static_cast<float>(std::clamp(
         GetPrivateProfileIntW(L"ToolPreferences", L"HighlightWidth", 24, app.iniPath.c_str()), 4U, 80U));
     app.textBold = GetPrivateProfileIntW(L"ToolPreferences", L"TextBold", 0, app.iniPath.c_str()) != 0;
@@ -989,7 +990,9 @@ Bitmap penCursorPixels(float diameter, Color value)
     // The colored disk matches the physical stroke width. Two outer contrast rings keep
     // white/black brushes visible; the hotspot stays at the center of the stroke.
     diameter = std::max(1.0f, diameter);
-    const int extent = static_cast<int>(std::ceil(diameter)) + 6;
+    // Fractional DPI transforms can leave an integer width a few ULPs above its
+    // actual size; keep the cursor bounds stable across display scales.
+    const int extent = static_cast<int>(std::ceil(diameter - .0001f)) + 6;
     auto bitmap = Bitmap::create(extent, extent);
     const float center = extent / 2 + .5f, radius = diameter / 2;
     for (int y = 0; y < extent; ++y)
@@ -1254,7 +1257,7 @@ void testPenCursor()
 {
     for (float dpi : {1.0f, 1.5f, 2.0f})
         for (float zoom : {.1f, 1.0f, 8.0f})
-            for (float thickness : {1.0f, 4.0f, 40.0f})
+            for (float thickness : {1.0f, 4.0f, 40.0f, 100.0f})
                 for (Color value : {rgb(12, 34, 56), rgb(255, 255, 255), rgb(0, 0, 0)})
                 {
                     app.dpi = dpi;
@@ -1280,7 +1283,11 @@ void testPenCursor()
                             static_cast<float>(pixels.height / 2)}) != value ||
                         pixels.pixels[center + 3] != 255 || pixels.pixels[3] != 0 ||
                         currentPenCursor() != cursor)
-                        throw std::runtime_error("Pen cursor size, color, hotspot, or caching failed.");
+                        throw std::runtime_error("Pen cursor size, color, hotspot, or caching failed: thickness=" +
+                            std::to_string(thickness) + " zoom=" + std::to_string(zoom) +
+                            " dpi=" + std::to_string(dpi) + " bitmap=" + std::to_string(bitmap.bmWidth) +
+                            "x" + std::to_string(bitmap.bmHeight) + " expected=" + std::to_string(pixels.width) +
+                            " hotspot=" + std::to_string(info.xHotspot) + "," + std::to_string(info.yHotspot));
                 }
     DestroyCursor(app.penCursor);
     app.penCursor = nullptr;
@@ -2893,6 +2900,8 @@ void changeTextFormatting(float size, bool bold, bool boxed)
 }
 void changeColor(Color value)
 {
+    if (app.tool == Tool::Select && !selected())
+        selectTool(Tool::Pen);
     // Recoloring a selected shape updates that shape tool's preference, even in Select mode.
     const size_t toolIndex = static_cast<size_t>(selected()
         ? app.document.items[app.document.selected].kind : app.tool);
@@ -3005,7 +3014,7 @@ void changeThickness(int delta)
                          ? app.document.items[app.document.selected].thickness
                          : brushWidth();
     const bool highlight = highlightMode();
-    float value = std::clamp(previous + delta, highlight ? 4.0f : 1.0f, highlight ? 80.0f : 40.0f);
+    float value = std::clamp(previous + delta, highlight ? 4.0f : 1.0f, highlight ? 80.0f : 100.0f);
     float &rememberedWidth = highlight ? app.highlightWidth : app.thickness;
     if (rememberedWidth != value)
     {
@@ -5424,9 +5433,17 @@ void testPenSizePreferences()
     if (app.thickness != 1) throw std::runtime_error("Saved pen size was not clamped to the minimum.");
     WritePrivateProfileStringW(L"ToolPreferences", L"StrokeWidth", L"999", app.iniPath.c_str());
     loadToolPreferences();
-    if (app.thickness != 40) throw std::runtime_error("Saved pen size was not clamped to the maximum.");
+    if (app.thickness != 100) throw std::runtime_error("Saved pen size was not clamped to the maximum.");
     changeThickness(1);
     if (app.toolPreferencesDirty) throw std::runtime_error("An unchanged pen size caused a preference write.");
+    app.thickness = 40;
+    changeThickness(60);
+    if (app.thickness != 100 || !app.toolPreferencesDirty || !saveToolPreferences())
+        throw std::runtime_error("Pen width did not grow past 40px and save at 100px.");
+    app.thickness = 4;
+    loadToolPreferences();
+    if (app.thickness != 100 || app.toolPreferencesDirty)
+        throw std::runtime_error("100px pen width did not survive preference reload.");
     // Re-sizing a selected stroke must remember the resulting size, even when
     // its previous width differs from the toolbar's remembered width.
     app.thickness = 4;
@@ -5631,6 +5648,48 @@ void testPaletteTools()
         throw std::runtime_error("Default palette migration failed.");
     app.image = Bitmap::create(640, 360);
     std::fill(app.image.pixels.begin(), app.image.pixels.end(), 255);
+    for (float dpi : {1.0f, 1.5f, 2.0f})
+    {
+        app.dpi = dpi;
+        SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(1000 * dpi),
+            static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        auto clickColor = [&](int index) {
+            buildButtons();
+            const auto button = std::find_if(app.buttons.begin(), app.buttons.end(),
+                [&](const Button &b) { return b.command == ColorFirst + index; });
+            if (button == app.buttons.end()) throw std::runtime_error("Palette swatch is missing.");
+            const auto point = MAKELPARAM(static_cast<int>((button->rect.left + 12) * dpi),
+                                         static_cast<int>((button->rect.top + 12) * dpi));
+            SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point);
+            SendMessageW(app.window, WM_LBUTTONUP, 0, point);
+        };
+        app.document.clear();
+        selectTool(Tool::Select);
+        const auto unchanged = renderedExport().pixels;
+        clickColor(4);
+        if (app.tool != Tool::Pen || activeColor() != Palette[4] || app.document.canUndo() ||
+            renderedExport().pixels != unchanged)
+            throw std::runtime_error("Selecting a color with no selected annotation must activate Pen without editing.");
+        selectTool(Tool::Select);
+        clickColor(4);
+        if (app.tool != Tool::Pen || activeColor() != Palette[4])
+            throw std::runtime_error("Clicking the remembered Pen color must still switch Select to Pen.");
+        Annotation shape;
+        shape.kind = Tool::Circle;
+        shape.a = {20, 20}; shape.b = {100, 100};
+        app.document.items = {shape};
+        selectTool(Tool::Select);
+        app.document.selected = 0;
+        clickColor(3);
+        if (app.tool != Tool::Select || app.document.selected != 0 ||
+            app.document.items[0].color != Palette[3] ||
+            app.colors[static_cast<size_t>(Tool::Circle)] != Palette[3] ||
+            app.colors[static_cast<size_t>(Tool::Pen)] != Palette[4] ||
+            !app.document.undo() || app.document.items[0] != shape || app.document.canUndo())
+            throw std::runtime_error("Selected annotation recoloring must retain Select and undo in one step.");
+    }
+    app.document.clear();
+    app.dpi = originalDpi;
     selectTool(Tool::Pen);
     Annotation item;
     item.points = {{20, 20}, {150, 70}};
@@ -7145,7 +7204,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             {
                 testPenSizePreferences();
                 writeTestReport(L"pen-size-test-results.txt",
-                    "PASS: default pen size, size-only preference write, reload, 1-40px bounds, no-op writes, "
+                    "PASS: default pen size, size-only preference write, reload, 1-100px bounds, no-op writes, "
                     "selected-stroke resizing with undo, independent highlight/text sizes, saved restart fixture.\n");
             }
             else
@@ -7688,13 +7747,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                             throw std::runtime_error("Cancelled size hold kept repeating.");
                     }
                     if (tool == Tool::Pen)
-                        app.thickness = 39;
+                        app.thickness = 99;
                     else
                         app.fontSize = 143;
                     auto point = startSizeHold(SizeUp);
                     sizeTicks(4);
                     endSizeHold(point);
-                    if (sizeValue() != (tool == Tool::Pen ? 40 : 144))
+                    if (sizeValue() != (tool == Tool::Pen ? 100 : 144))
                         throw std::runtime_error("Size hold exceeded the maximum.");
                     if (tool == Tool::Pen)
                         app.thickness = 2;

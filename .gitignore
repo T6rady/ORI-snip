@@ -1,6 +1,11 @@
 .tools/
 build/
 build-*/
+AGENTS.md
+NEXT-CHAT.md
+IT-REVIEW.md
+IT-WALKTHROUGH.md
+VALIDATION.md
 dist/TigerSnip.ini
 llvm-release.json
 test-output/

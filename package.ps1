@@ -18,6 +18,21 @@ foreach ($taskFile in $taskPayload) {
     if (-not (Test-Path -LiteralPath $taskFile.Path -PathType Leaf)) { throw "Missing $($taskFile.Source); run build.ps1 first." }
 }
 $taskVersionInfo = (Get-Item -LiteralPath $taskPayload[0].Path).VersionInfo
+$taskBuildRecordPath = Join-Path $taskRoot 'dist\Tiger Snip Build.json'
+if (-not (Test-Path -LiteralPath $taskBuildRecordPath)) { throw 'Run build.ps1 first to create the build record.' }
+$taskBuildRecord = Get-Content -LiteralPath $taskBuildRecordPath -Raw | ConvertFrom-Json
+if ($taskBuildRecord.formatVersion -ne 1 -or -not $taskBuildRecord.inputs.Count) {
+    throw 'The build record is incomplete or unsupported. Run build.ps1 again.'
+}
+if ($taskBuildRecord.output.name -ne 'Tiger Snip.exe' -or
+    $taskBuildRecord.output.sha256 -ne (Get-FileHash -LiteralPath $taskPayload[0].Path -Algorithm SHA256).Hash) {
+    throw 'The executable does not match its build record. Run build.ps1 again.'
+}
+foreach ($taskInput in $taskBuildRecord.inputs) {
+    if ($taskInput.sha256 -ne (Get-FileHash -LiteralPath (Join-Path $taskRoot $taskInput.path) -Algorithm SHA256).Hash) {
+        throw "Build input changed after compilation: $($taskInput.path). Run build.ps1 again."
+    }
+}
 $taskVersion = '{0}.{1}.{2}.{3}' -f $taskVersionInfo.FileMajorPart, $taskVersionInfo.FileMinorPart, $taskVersionInfo.FileBuildPart, $taskVersionInfo.FilePrivatePart
 if ($taskVersion -ne '1.0.2.0') { throw 'This package definition expects Tiger Snip 1.0.2.0.' }
 
@@ -158,25 +173,21 @@ $taskHashes = @('Tiger Snip 1.0.2 release information',
     'Installation: current user; local app and Start menu shortcut; no automatic startup.',
     'Settings: current user LocalAppData; personal preferences are excluded from this package.',
     'Build: C++20, static runtime; package authored with Windows Installer and makecab.',
+    ('Compiler: ' + $taskBuildRecord.compilerVersion[0]),
+    ('Executable built: ' + $taskBuildRecord.builtAtUtc),
+    'Build record: Tiger Snip Build.json (compiler/tool hashes, options, source-input and EXE hashes).',
+    'Validated toolchain provenance: BUILD-TOOLCHAIN.md in the source repository.',
     'Signing: unsigned. IT deployment policy remains to be validated.')
-if (Get-Command git -ErrorAction SilentlyContinue) {
-    Push-Location $taskRoot
-    try {
-        $taskCommit = & git rev-parse HEAD
-        if ($LASTEXITCODE -eq 0) {
-            $taskChanges = @(& git status --porcelain)
-            $taskHashes += 'Source base commit: ' + $taskCommit
-            $taskHashes += 'Working tree has uncommitted changes: ' + [bool]$taskChanges.Count
-        }
-    } finally { Pop-Location }
-}
+$taskHashes += 'Source base commit at build time: ' + $taskBuildRecord.sourceBaseCommit
+$taskHashes += 'Working tree had uncommitted changes at build time: ' + $taskBuildRecord.workingTreeHasUncommittedChanges
+$taskHashes += 'A source archive without Git metadata records those fields as unknown; input hashes still identify the actual files.'
 $taskHashes += @('', 'SHA256:')
-foreach ($taskArtifact in @($OutputPath) + @($taskPayload.Path)) {
+foreach ($taskArtifact in @($OutputPath, $taskBuildRecordPath) + @($taskPayload.Path)) {
     $taskHash = Get-FileHash -LiteralPath $taskArtifact -Algorithm SHA256
     $taskHashes += $taskHash.Hash + '  ' + [IO.Path]::GetFileName($taskArtifact)
 }
 $taskHashes += @('', 'Build input SHA256:')
-foreach ($taskInput in @('build.ps1', 'package.ps1', 'CMakeLists.txt', 'scripts\run-test.ps1') +
+foreach ($taskInput in @('build.ps1', 'package.ps1', 'CMakeLists.txt', 'scripts\run-test.ps1', 'scripts\write-build-record.ps1') +
     @((Get-ChildItem -LiteralPath (Join-Path $taskRoot 'src') -File | Sort-Object Name |
         ForEach-Object { 'src\' + $_.Name })) + @('resources\app.rc',
     'resources\app.manifest', 'resources\tiger-snip.ico', 'resources\app-icon.png', 'scripts\make-icon.ps1')) {

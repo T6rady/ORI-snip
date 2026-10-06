@@ -3,9 +3,8 @@ $ErrorActionPreference = 'Stop'
 if ($OutputName -notmatch '^[A-Za-z0-9][A-Za-z0-9._ -]*\.exe$') { throw 'OutputName must be an executable filename.' }
 $taskRoot = $PSScriptRoot
 if (-not $CompilerDirectory) {
-    $taskPortable = Get-ChildItem -LiteralPath (Join-Path $taskRoot '.tools') -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like 'llvm-mingw-*' } | Sort-Object Name -Descending | Select-Object -First 1
-    if ($taskPortable) { $CompilerDirectory = Join-Path $taskPortable.FullName 'bin' }
+    # Keep ordinary rebuilds on the verified toolchain; newer downloads are not selected silently.
+    $CompilerDirectory = Join-Path $taskRoot '.tools\llvm-mingw-20260922-ucrt-x86_64\bin'
 }
 if (-not $CompilerDirectory -or -not (Test-Path -LiteralPath (Join-Path $CompilerDirectory 'clang++.exe'))) {
     throw 'Provide -CompilerDirectory with an LLVM-MinGW bin folder, or use CMake with Visual Studio C++ Build Tools. See README.md.'
@@ -30,6 +29,7 @@ $taskArguments = @('-std=c++20','-Os','-Wall','-Wextra','-Wpedantic','-DUNICODE'
     '-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32','-lcomdlg32','-lcomctl32','-lshell32','-ladvapi32','-ldwmapi','-luuid')
 & $taskCompiler @taskArguments
 if ($LASTEXITCODE -ne 0) { throw 'C++ compilation failed.' }
+& (Join-Path $taskRoot 'scripts\write-build-record.ps1') -CompilerDirectory $CompilerDirectory -OutputName $OutputName -Arguments $taskArguments
 Get-Item -LiteralPath (Join-Path $taskDist $OutputName) | Select-Object FullName, Length, LastWriteTime
 Copy-Item -LiteralPath (Join-Path $taskRoot 'resources\licenses\LLVM.txt'), (Join-Path $taskRoot 'resources\licenses\MinGW-runtime.txt') -Destination $taskDist
 if ($Test) {
@@ -44,7 +44,7 @@ if ($Test) {
     $taskAutoCopyArguments = @($taskAutoCopyArguments | Where-Object { $_ -ne '-mwindows' })
     & $taskCompiler @taskAutoCopyArguments
     if ($LASTEXITCODE -ne 0) { throw 'Auto copy test compilation failed.' }
-    $taskFileSaveArguments = @($taskClipboardArguments)
+    $taskFileSaveArguments = @($taskClipboardArguments) + '-DTIGER_SNIP_TESTING'
     $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskRoot 'tests\clipboard.cpp'))] = Join-Path $taskRoot 'tests\file_save.cpp'
     $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskBuild 'clipboard_test.exe'))] = Join-Path $taskBuild 'file_save_test.exe'
     & $taskCompiler @taskFileSaveArguments
@@ -59,6 +59,16 @@ if ($Test) {
     $taskRobustnessArguments[$taskRobustnessArguments.IndexOf((Join-Path $taskBuild 'settings_test.exe'))] = Join-Path $taskBuild 'robustness_test.exe'
     & $taskCompiler @taskRobustnessArguments
     if ($LASTEXITCODE -ne 0) { throw 'Robustness test compilation failed.' }
+    $taskTextArguments = @($taskAutoCopyArguments)
+    $taskTextArguments[$taskTextArguments.IndexOf((Join-Path $taskRoot 'tests\autocopy.cpp'))] = Join-Path $taskRoot 'tests\text_edit.cpp'
+    $taskTextArguments[$taskTextArguments.IndexOf((Join-Path $taskBuild 'autocopy_test.exe'))] = Join-Path $taskBuild 'text_edit_test.exe'
+    & $taskCompiler @taskTextArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Text editing test compilation failed.' }
+    $taskInstanceArguments = @($taskClipboardArguments)
+    $taskInstanceArguments[$taskInstanceArguments.IndexOf((Join-Path $taskRoot 'tests\clipboard.cpp'))] = Join-Path $taskRoot 'tests\single_instance.cpp'
+    $taskInstanceArguments[$taskInstanceArguments.IndexOf((Join-Path $taskBuild 'clipboard_test.exe'))] = Join-Path $taskBuild 'single_instance_test.exe'
+    & $taskCompiler @taskInstanceArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Single-instance test compilation failed.' }
     $taskRunRoot = Join-Path $taskBuild ('test-output\' + [guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $taskRunRoot | Out-Null
     Push-Location $taskRunRoot
@@ -78,6 +88,10 @@ if ($Test) {
         if ($LASTEXITCODE -ne 0) { throw 'Settings test failed.' }
         & (Join-Path $taskBuild 'robustness_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Robustness test failed.' }
+        & (Join-Path $taskBuild 'text_edit_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Text editing test failed.' }
+        & (Join-Path $taskBuild 'single_instance_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Single-instance test failed.' }
         Write-Host "Test files: $taskRunRoot"
     } finally { Pop-Location }
 }

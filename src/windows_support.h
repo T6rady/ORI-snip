@@ -17,6 +17,8 @@ std::optional<std::wstring> readRegistryString(HKEY root, const wchar_t *key, co
 bool startupEnabled(const std::wstring &executable);
 void setStartupEnabled(const std::wstring &executable, bool enabled);
 bool messageAvailable(int result, DWORD failure);
+void forwardExistingLaunch(const wchar_t *windowClass, UINT message, WPARAM request,
+                           DWORD timeoutMs = 5000);
 
 // No C++ exception, including one from recovery, may cross a Windows callback.
 template <class Result, class Action, class Recovery>

@@ -155,4 +155,34 @@ bool messageAvailable(int result, DWORD failure)
         throwWindowsError("Windows could not read the next application event.", failure);
     return result != 0;
 }
+void forwardExistingLaunch(const wchar_t *windowClass, UINT message, WPARAM request,
+                           DWORD timeoutMs)
+{
+    const ULONGLONG deadline = GetTickCount64() + timeoutMs;
+    for (;;)
+    {
+        // The instance mutex is created before the window. A simultaneous launch
+        // waits briefly for that window instead of silently discarding its request.
+        if (HWND existing = FindWindowW(windowClass, nullptr))
+        {
+            DWORD pid = 0;
+            if (GetWindowThreadProcessId(existing, &pid))
+            {
+                AllowSetForegroundWindow(pid); // Foreground permission is best effort.
+                if (PostMessageW(existing, message, request, 0))
+                    return;
+                const DWORD failure = GetLastError();
+                if (failure != ERROR_INVALID_WINDOW_HANDLE)
+                    throwWindowsError("Windows could not open the running Tiger Snip window.",
+                                      failure);
+            }
+        }
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline)
+            throwWindowsError(
+                "Tiger Snip is still starting or could not start. Wait a moment and try again.",
+                ERROR_TIMEOUT);
+        Sleep(static_cast<DWORD>(std::min<ULONGLONG>(20, deadline - now)));
+    }
+}
 } // namespace snip

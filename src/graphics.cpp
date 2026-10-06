@@ -360,6 +360,14 @@ Bitmap Graphics::flatten(const Bitmap &image, const std::vector<Annotation> &ite
           "Cannot read exported image.");
     return result;
 }
+Bitmap Graphics::flattenRegion(const Bitmap &image, const std::vector<Annotation> &items,
+                               int editingText, int x, int y, int width, int height)
+{
+    auto shifted = items;
+    for (auto &item : shifted)
+        item.move({-float(x), -float(y)});
+    return flatten(image.crop(x, y, width, height), shifted, editingText);
+}
 const Bitmap &Graphics::samtecLogo(int mark)
 {
     auto &cached = samtecLogos_.at(mark);
@@ -511,14 +519,13 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
         }
     return badge;
 }
-void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
+Rect Graphics::samtecLogoBounds(const Bitmap &image, uint8_t style)
 {
     style = style < 6 ? style : 0;
     const int side = std::min(image.width, image.height);
     const int margin =
         std::min(std::max(1, static_cast<int>(std::lround(side * .025))), (side - 1) / 2);
     auto master = samtecBadge(style);
-    const bool soft = style % 2;
     constexpr double fractions[] = {.09, .075, .085, .07, .055, .05};
     constexpr int maxHeights[] = {80, 64, 80, 64, 52, 44};
     const int desiredHeight =
@@ -529,6 +536,16 @@ void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
     const int width = std::max(1, static_cast<int>(std::lround(master.width * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(master.height * scale)));
     const int left = image.width - margin - width, top = image.height - margin - height;
+    return {float(left), float(top), float(left + width), float(top + height)};
+}
+void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
+{
+    style = style < 6 ? style : 0;
+    const auto bounds = samtecLogoBounds(image, style);
+    const int left = static_cast<int>(bounds.left), top = static_cast<int>(bounds.top);
+    const int width = static_cast<int>(bounds.width()), height = static_cast<int>(bounds.height());
+    auto master = samtecBadge(style);
+    const bool soft = style % 2;
     if (soft)
     {
         double luminance = 0;

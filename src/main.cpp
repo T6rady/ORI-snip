@@ -185,6 +185,10 @@ struct Application
     HWND textEdit = nullptr;
     HFONT textEditFont = nullptr;
     HBRUSH textEditBackground = nullptr;
+    Com<IWICBitmap> textEditBacking;
+    Com<ID2D1RenderTarget> textEditTarget;
+    Com<ID2D1Bitmap> textEditDisplay;
+    Com<ID2D1BitmapBrush> textEditWorkspace;
     bool textNew = false, syncingText = false;
     Annotation textBefore;
     HMENU shapeMenu = nullptr;
@@ -420,6 +424,7 @@ int previewPadding()
 void resetPreview()
 {
     app.displayBitmap.reset();
+    app.textEditDisplay.reset();
     app.previewImage = {};
     app.previewItems.clear();
     app.previewValid = false;
@@ -429,20 +434,80 @@ void resetRecentDisplays()
     for (auto &snip : app.recent)
         snip.displayThumbnail.reset();
 }
+bool updateTextPreview(int editingText)
+{
+    // Only the active text item may differ. Native EDIT owns its glyphs; only a
+    // changing box affects the screenshot underneath. Other changes use full export.
+    if (editingText < 0 || !app.previewValid || app.previewEditingText != editingText ||
+        app.previewOptions != app.exportOptions ||
+        app.previewItems.size() != app.document.items.size())
+        return false;
+    for (size_t i = 0; i < app.document.items.size(); ++i)
+        if (static_cast<int>(i) != editingText && app.previewItems[i] != app.document.items[i])
+            return false;
+    const auto &before = app.previewItems[editingText];
+    const auto &after = app.document.items[editingText];
+    if (before.kind != Tool::Text || after.kind != Tool::Text)
+        return false;
+    if (!before.boxed && !after.boxed)
+        return true;
+    const auto oldBounds = before.bounds(), newBounds = after.bounds();
+    const int left = std::max(0, int(std::floor(std::min(oldBounds.left, newBounds.left))) - 3);
+    const int top = std::max(0, int(std::floor(std::min(oldBounds.top, newBounds.top))) - 3);
+    const int right =
+        std::min(app.image.width, int(std::ceil(std::max(oldBounds.right, newBounds.right))) + 3);
+    const int bottom = std::min(app.image.height,
+                                int(std::ceil(std::max(oldBounds.bottom, newBounds.bottom))) + 3);
+    if (left >= right || top >= bottom)
+        return true;
+    // Styled corners and adaptive watermarks depend on more than the box region.
+    // Keep their established pipeline when an edit touches them.
+    if (app.exportOptions.professionalBorder && app.exportOptions.professionalRounded &&
+        (left < 10 || top < 10 || right > app.image.width - 10 || bottom > app.image.height - 10))
+        return false;
+    if (app.exportOptions.samtecLogo)
+    {
+        const auto logo = app.graphics.samtecLogoBounds(app.image, app.exportOptions.samtecStyle);
+        if (left < logo.right && right > logo.left && top < logo.bottom && bottom > logo.top)
+            return false;
+    }
+    auto region = app.graphics.flattenRegion(app.image, app.document.items, editingText, left, top,
+                                             right - left, bottom - top);
+    // Professional effects preserve opaque interior pixels exactly; transparent
+    // sources require the full compositing pipeline instead.
+    for (size_t i = 3; i < region.pixels.size(); i += 4)
+        if (region.pixels[i] != 255)
+            return false;
+    const int x = left + previewPadding(), y = top + previewPadding();
+    for (int row = 0; row < region.height; ++row)
+        std::copy_n(&region.pixels[static_cast<size_t>(row) * region.width * 4], region.width * 4,
+                    &app.previewImage
+                         .pixels[(static_cast<size_t>(y + row) * app.previewImage.width + x) * 4]);
+    const auto rect = D2D1::RectU(x, y, x + region.width, y + region.height);
+    for (auto *display : {&app.displayBitmap, &app.textEditDisplay})
+        if (*display)
+            check((*display)->CopyFromMemory(&rect, region.pixels.data(), region.width * 4),
+                  "Cannot refresh inline text preview.");
+    return true;
+}
 const Bitmap &previewImage()
 {
     const int editingText = app.textEdit ? app.document.selected : -1;
     if (!app.previewValid || app.previewOptions != app.exportOptions ||
         app.previewItems != app.document.items || app.previewEditingText != editingText)
     {
-        auto image =
-            app.graphics.exportImage(app.image, app.document.items, app.exportOptions, editingText);
-        app.previewImage = std::move(image);
+        if (!updateTextPreview(editingText))
+        {
+            auto image = app.graphics.exportImage(app.image, app.document.items, app.exportOptions,
+                                                  editingText);
+            app.previewImage = std::move(image);
+            app.displayBitmap.reset();
+            app.textEditDisplay.reset();
+        }
         app.previewItems = app.document.items;
         app.previewOptions = app.exportOptions;
         app.previewEditingText = editingText;
         app.previewValid = true;
-        app.displayBitmap.reset();
     }
     return app.previewImage;
 }
@@ -2122,7 +2187,10 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     auto client = clientDips(), canvas = canvasRect();
     Com<ID2D1Bitmap> alternateBitmap;
     Com<ID2D1BitmapBrush> alternateWorkspaceBrush;
-    auto &workspaceBrush = alternate ? alternateWorkspaceBrush : app.workspaceBrush;
+    const bool textBacking = alternate && alternate == app.textEditTarget.get();
+    auto &workspaceBrush = textBacking ? app.textEditWorkspace
+                           : alternate ? alternateWorkspaceBrush
+                                       : app.workspaceBrush;
     float dpiX = 0, dpiY = 0;
     rt->GetDpi(&dpiX, &dpiY);
     if (!workspaceBrush ||
@@ -2409,7 +2477,9 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     if (hasImage())
     {
         const auto &preview = previewImage();
-        auto &display = alternate ? alternateBitmap : app.displayBitmap;
+        auto &display = textBacking ? app.textEditDisplay
+                        : alternate ? alternateBitmap
+                                    : app.displayBitmap;
         if (!display)
         {
             auto pixels = preview.pixels;
@@ -2705,6 +2775,68 @@ Bitmap renderEditorPreview()
           "Cannot read editor preview.");
     return result;
 }
+Bitmap renderTextEditorBackground(int x, int y, int width, int height)
+{
+    // Keep the offscreen target and its screenshot upload for this editing session.
+    // Read only the field. Keep the complete drawing routine: clipping a scaled
+    // bitmap changes a few Direct2D interpolation samples at fractional origins.
+    RECT client{};
+    GetClientRect(app.window, &client);
+    UINT backingWidth = 0, backingHeight = 0;
+    if (app.textEditBacking)
+        check(app.textEditBacking->GetSize(&backingWidth, &backingHeight),
+              "Cannot inspect inline text background.");
+    float dpiX = 0, dpiY = 0;
+    if (app.textEditTarget)
+        app.textEditTarget->GetDpi(&dpiX, &dpiY);
+    if (!app.textEditTarget || backingWidth != static_cast<UINT>(client.right) ||
+        backingHeight != static_cast<UINT>(client.bottom) || dpiX != app.dpi * 96 ||
+        dpiY != app.dpi * 96)
+    {
+        app.textEditDisplay.reset();
+        app.textEditWorkspace.reset();
+        app.textEditTarget.reset();
+        app.textEditBacking.reset();
+        Com<IWICImagingFactory> factory;
+        check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                               __uuidof(IWICImagingFactory),
+                               reinterpret_cast<void **>(factory.put())),
+              "Cannot initialize inline text background.");
+        check(factory->CreateBitmap(client.right, client.bottom, GUID_WICPixelFormat32bppPBGRA,
+                                    WICBitmapCacheOnLoad, app.textEditBacking.put()),
+              "Cannot create inline text background.");
+        check(app.graphics.factory->CreateWicBitmapRenderTarget(
+                  app.textEditBacking.get(),
+                  D2D1::RenderTargetProperties(
+                      D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                      D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+                      app.dpi * 96, app.dpi * 96),
+                  app.textEditTarget.put()),
+              "Cannot render inline text background.");
+    }
+    // Match the old edge-clamping behavior when panning puts part of the field outside.
+    const int left = std::clamp(x, 0, int(client.right) - 1);
+    const int top = std::clamp(y, 0, int(client.bottom) - 1);
+    const int right = std::clamp(x + width, left + 1, int(client.right));
+    const int bottom = std::clamp(y + height, top + 1, int(client.bottom));
+    paintEditor(app.textEditTarget.get());
+    auto result = Bitmap::create(right - left, bottom - top);
+    WICRect region{left, top, result.width, result.height};
+    check(app.textEditBacking->CopyPixels(&region, result.width * 4,
+                                          static_cast<UINT>(result.pixels.size()),
+                                          result.pixels.data()),
+          "Cannot read inline text background.");
+    auto field = Bitmap::create(width, height);
+    for (int row = 0; row < height; ++row)
+        for (int column = 0; column < width; ++column)
+        {
+            const int sx = std::clamp(x + column - left, 0, result.width - 1);
+            const int sy = std::clamp(y + row - top, 0, result.height - 1);
+            std::copy_n(&result.pixels[(static_cast<size_t>(sy) * result.width + sx) * 4], 4,
+                        &field.pixels[(static_cast<size_t>(row) * width + column) * 4]);
+        }
+    return field;
+}
 LRESULT CALLBACK textEditProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp, UINT_PTR,
                                    DWORD_PTR)
 {
@@ -2802,7 +2934,7 @@ void syncTextEditor()
 
     // Paint the actual screenshot beneath the EDIT control. A pattern brush restores
     // those pixels on deletion/selection, unlike a hollow brush which leaves text trails.
-    const auto backing = renderEditorPreview();
+    const auto backing = renderTextEditorBackground(x, y, width, height);
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = width;
@@ -2818,16 +2950,7 @@ void syncTextEditor()
             DeleteObject(bitmap);
         throw std::runtime_error("Cannot render inline text background.");
     }
-    auto pixels = static_cast<uint8_t *>(bits);
-    for (int row = 0; row < height; ++row)
-        for (int column = 0; column < width; ++column)
-        {
-            const int sx = std::clamp(x + column, 0, backing.width - 1);
-            const int sy = std::clamp(y + row, 0, backing.height - 1);
-            const size_t src = (static_cast<size_t>(sy) * backing.width + sx) * 4;
-            const size_t dst = (static_cast<size_t>(row) * width + column) * 4;
-            std::copy_n(&backing.pixels[src], 4, &pixels[dst]);
-        }
+    std::copy(backing.pixels.begin(), backing.pixels.end(), static_cast<uint8_t *>(bits));
     HBRUSH background = CreatePatternBrush(bitmap);
     DeleteObject(bitmap);
     if (!background)
@@ -2875,6 +2998,10 @@ void finishTextEditing(bool cancel, bool selectAfter)
     const int index = app.document.selected;
     HWND edit = std::exchange(app.textEdit, nullptr);
     DestroyWindow(edit);
+    app.textEditDisplay.reset();
+    app.textEditWorkspace.reset();
+    app.textEditTarget.reset();
+    app.textEditBacking.reset();
     if (app.textEditBackground)
     {
         DeleteObject(app.textEditBackground);
@@ -7707,14 +7834,7 @@ int applicationMain(HINSTANCE instance, int show)
                 throw std::runtime_error("Cannot initialize the app instance.");
             if (GetLastError() == ERROR_ALREADY_EXISTS && !app.smoke && !app.resizeTest)
             {
-                HWND existing = FindWindowW(MainClass, nullptr);
-                if (existing)
-                {
-                    DWORD pid = 0;
-                    GetWindowThreadProcessId(existing, &pid);
-                    AllowSetForegroundWindow(pid);
-                    PostMessageW(existing, LaunchMessage, snipNow, 0);
-                }
+                forwardExistingLaunch(MainClass, LaunchMessage, snipNow);
                 CloseHandle(mutex);
                 CoUninitialize();
                 return 0;

@@ -144,3 +144,17 @@ Save writes a PNG wherever you choose, including a network or synchronized folde
 An interrupted save can leave an adjacent temporary or recovery image file.
 Eraser removes annotations; it does not erase the underlying screenshot. Highlight
 is translucent. Cropping is reversible in Recent/undo while the app is running.
+
+SUPPORT
+Maintainer/problem reports: Jack Kempf, jack.kempf@samtec.com.
+
+SAVING AND RECOVERY FILES
+Each save uses a unique temporary filename. Forced termination can leave an
+adjacent .tiger-snip-{GUID}.tmp or .tmp.previous recovery file containing image
+data. It will not block later saves. Old leftovers are not automatically deleted;
+ask Jack/IT to inspect recovery needs before removing a specifically identified file.
+
+UPDATING THIS SAME 1.0.2 PACKAGE
+Close Tiger Snip and disable Run at sign-in if enabled. Uninstall the previous
+copy using Windows Installed apps, then install the replacement MSI. Preferences
+survive. Do not bypass company installation/security policy to force a repair.

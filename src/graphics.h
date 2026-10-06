@@ -79,6 +79,9 @@ class Graphics
     Com<IDWriteTextLayout> textLayout(const Annotation &item);
     void measureText(Annotation &item);
     Bitmap flatten(const Bitmap &image, const std::vector<Annotation> &items, int editingText = -1);
+    Bitmap flattenRegion(const Bitmap &image, const std::vector<Annotation> &items, int editingText,
+                         int x, int y, int width, int height);
+    Rect samtecLogoBounds(const Bitmap &image, uint8_t style);
     // All export destinations use this pipeline; flatten remains the unstyled editing image.
     Bitmap exportImage(const Bitmap &image, const std::vector<Annotation> &items,
                        const ExportOptions &options = {}, int editingText = -1);

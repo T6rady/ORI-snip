@@ -1,4 +1,5 @@
 #include "graphics.h"
+#include "test_hooks.h"
 #include <sddl.h>
 #include <filesystem>
 #include <fstream>
@@ -7,6 +8,7 @@
 
 namespace
 {
+std::wstring lastTemporary, lastBackup;
 void require(bool condition, const char *message)
 {
     if (!condition)
@@ -88,8 +90,16 @@ void expectFailure(const std::wstring &path, const std::vector<uint8_t> &bytes)
 }
 }
 
-int wmain()
+int wmain(int argc, wchar_t **argv)
 {
+    if (argc == 3 && wcscmp(argv[1], L"--interrupt-save") == 0)
+    {
+        snip::testing::fileSaveCheckpoint = [](const wchar_t *, const wchar_t *) {
+            ExitProcess(77);
+        };
+        snip::saveBytes(argv[2], {10, 20, 30});
+        return 2;
+    }
     const auto directory = (std::filesystem::current_path() /
         (L"file-save-test-" + std::to_wstring(GetCurrentProcessId()))).wstring();
     if (!CreateDirectoryW(directory.c_str(), nullptr))
@@ -104,6 +114,14 @@ int wmain()
     int result = 0;
     try
     {
+        snip::testing::fileSaveCheckpoint = [](const wchar_t *stage, const wchar_t *recovery) {
+            lastTemporary = stage;
+            lastBackup = recovery;
+        };
+        auto noCurrentStaging = [&] {
+            require(!std::filesystem::exists(lastTemporary) && !std::filesystem::exists(lastBackup),
+                    "Save left its own unnecessary temporary/recovery file.");
+        };
         const std::vector<uint8_t> original{1, 2, 3, 4}, replacement{10, 20, 30};
         snip::saveBytes(path, original);
         require(readBytes(path) == original, "New-file contents differ.");
@@ -116,8 +134,7 @@ int wmain()
         snip::saveBytes(path, original);
         require(readBytes(path) == original && permissions(path) == before,
                 "Repeated overwrite lost private permissions.");
-        require(!std::filesystem::exists(temporary) && !std::filesystem::exists(backup),
-                "Successful save left temporary/recovery files.");
+        noCurrentStaging();
 
         held = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -127,8 +144,7 @@ int wmain()
         held = INVALID_HANDLE_VALUE;
         require(readBytes(path) == original && permissions(path) == before,
                 "Locked-file failure changed the original or its permissions.");
-        require(!std::filesystem::exists(temporary) && !std::filesystem::exists(backup),
-                "Locked-file failure left an unnecessary temporary/recovery file.");
+        noCurrentStaging();
 
         require(SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_READONLY), "Cannot set read-only fixture.");
         expectFailure(path, replacement);
@@ -137,16 +153,92 @@ int wmain()
                 "Read-only failure changed the original.");
         require(SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL), "Cannot restore fixture attributes.");
 
-        // A previous recovery file must never be overwritten by a new save attempt.
+        // Old PID-based leftovers neither block a later save nor get deleted.
+        snip::saveBytes(temporary, original);
         snip::saveBytes(backup, replacement);
-        expectFailure(path, replacement);
-        require(readBytes(path) == original && readBytes(backup) == replacement &&
-                permissions(path) == before, "Existing recovery data was overwritten.");
+        snip::saveBytes(path, replacement);
+        require(readBytes(path) == replacement && readBytes(temporary) == original &&
+                    readBytes(backup) == replacement && permissions(path) == before,
+                "Old temporary/recovery files blocked saving or were changed.");
+        noCurrentStaging();
+        snip::saveBytes(path, original);
+
+        // Terminate a separate producer after its protected staging pixels are flushed.
+        // This bypasses destructors just like a crash or forced process termination.
+        std::wstring command =
+            L"\"" + snip::executablePath() + L"\" --interrupt-save \"" + path + L"\"";
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        PROCESS_INFORMATION child{};
+        require(CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                               nullptr, nullptr, &startup, &child),
+                "Cannot start interrupted-save fixture.");
+        CloseHandle(child.hThread);
+        const auto waited = WaitForSingleObject(child.hProcess, 10000);
+        if (waited != WAIT_OBJECT_0)
+            TerminateProcess(child.hProcess, 2);
+        DWORD exit = 0;
+        const bool exited = GetExitCodeProcess(child.hProcess, &exit) != FALSE;
+        CloseHandle(child.hProcess);
+        require(waited == WAIT_OBJECT_0 && exited && exit == 77,
+                "Interrupted-save fixture did not terminate at the checkpoint.");
+        require(readBytes(path) == original && permissions(path) == before,
+                "Interrupted save changed the existing PNG.");
+        std::wstring interrupted;
+        for (const auto &entry : std::filesystem::directory_iterator(directory))
+        {
+            const auto candidate = entry.path().wstring();
+            if (candidate != temporary && entry.path().extension() == L".tmp")
+            {
+                require(interrupted.empty(), "More than one interrupted staging file found.");
+                interrupted = candidate;
+            }
+        }
+        require(!interrupted.empty() && readBytes(interrupted) == replacement &&
+                    permissions(interrupted) == before,
+                "Interrupted staging pixels or protected permissions differ.");
+        snip::saveBytes(path, replacement);
+        require(readBytes(path) == replacement && readBytes(interrupted) == replacement &&
+                    permissions(path) == before,
+                "Crash leftover blocked a later save or was swept.");
+        noCurrentStaging();
+        require(DeleteFileW(interrupted.c_str()), "Cannot remove interrupted-save fixture.");
+        require(DeleteFileW(temporary.c_str()), "Cannot remove old temporary fixture.");
         require(DeleteFileW(backup.c_str()), "Cannot remove recovery fixture.");
+
+        // Even an unexpected recovery file at this attempt's unique name is preserved.
+        snip::testing::fileSaveCheckpoint = [](const wchar_t *stage, const wchar_t *recovery) {
+            lastTemporary = stage;
+            lastBackup = recovery;
+            std::ofstream file(std::filesystem::path(recovery), std::ios::binary);
+            file << "recovery";
+            file.close();
+            require(bool(file), "Cannot create recovery collision fixture.");
+        };
+        expectFailure(path, original);
+        require(readBytes(path) == replacement &&
+                    readBytes(lastBackup) ==
+                        std::vector<uint8_t>({'r', 'e', 'c', 'o', 'v', 'e', 'r', 'y'}) &&
+                    !std::filesystem::exists(lastTemporary) && permissions(path) == before,
+                "Existing recovery data was overwritten or current staging was not cleaned.");
+        require(DeleteFileW(lastBackup.c_str()), "Cannot remove recovery collision fixture.");
+        // An exception after staging also cleans only this attempt's temporary file.
+        snip::testing::fileSaveCheckpoint = [](const wchar_t *stage, const wchar_t *recovery) {
+            lastTemporary = stage;
+            lastBackup = recovery;
+            throw std::runtime_error("Injected failure after staging.");
+        };
+        expectFailure(path, original);
+        noCurrentStaging();
+        require(readBytes(path) == replacement, "Exception cleanup changed the existing file.");
+        snip::testing::fileSaveCheckpoint = nullptr;
         expectFailure(directory, replacement);
         expectFailure((std::filesystem::path(directory) / L"missing" / L"capture.png").wstring(), replacement);
-        std::cout << "PASS: new and repeated saves, protected per-user DACL preservation, locked/read-only "
-                     "failure preservation, temporary cleanup, recovery-file protection, invalid destinations.\n";
+        std::cout << "PASS: new and repeated saves, protected per-user DACL preservation, "
+                     "locked/read-only "
+                     "failure preservation, unique save names, crash-leftover retention/retry and "
+                     "permissions, scoped exception cleanup, recovery-file protection, invalid "
+                     "destinations.\n";
     }
     catch (const std::exception &exception)
     {

@@ -72,6 +72,9 @@ enum Command
     InstantSnip,
     CropTool,
     EraserTool,
+    RotateCurvedArrow,
+    FlipCurvedArrow,
+    ReverseCurvedArrow,
     ColorFirst = 2000,
     ShowEditor = 1200,
     CircleStyleMenu = 1300,
@@ -388,6 +391,15 @@ bool selected()
 {
     return app.document.selected >= 0 &&
            app.document.selected < static_cast<int>(app.document.items.size());
+}
+bool curvedArrowSelected()
+{
+    return selected() && app.document.items[app.document.selected].kind == Tool::Arrow &&
+           app.document.items[app.document.selected].style == 2;
+}
+bool curvedArrowCommand(int id)
+{
+    return id >= RotateCurvedArrow && id <= ReverseCurvedArrow;
 }
 Color activeColor()
 {
@@ -1361,6 +1373,25 @@ void buildButtons()
         add(NewSnip, L"Take a snip", 152, middle + 30, 42);
     }
 
+    if (curvedArrowSelected() && app.tool == Tool::Select && app.drag == Drag::None &&
+        !app.erasing && !app.cropping && !app.pickingColor && !app.textEdit)
+    {
+        const auto canvas = canvasRect(), box = app.document.items[app.document.selected].bounds();
+        const auto a = app.view.toScreen({box.left, box.top});
+        const auto b = app.view.toScreen({box.right, box.bottom});
+        constexpr float width = 242, height = 28, margin = 8;
+        if (b.x >= canvas.left && a.x <= canvas.right && b.y >= canvas.top && a.y <= canvas.bottom &&
+            canvas.width() >= width + margin * 2 && canvas.height() >= height + margin * 2)
+        {
+            x = std::clamp((a.x + b.x - width) / 2, canvas.left + margin, canvas.right - width - margin);
+            const float y = std::clamp(a.y - height - 12 >= canvas.top + margin
+                ? a.y - height - 12 : b.y + 12, canvas.top + margin, canvas.bottom - height - margin);
+            add(RotateCurvedArrow, L"Rotate 90\u00B0", 82, y, height);
+            add(FlipCurvedArrow, L"Flip curve", 78, y, height);
+            add(ReverseCurvedArrow, L"Reverse", 74, y, height);
+        }
+    }
+
     // Keep native tooltip hit areas in physical pixels as the window moves between displays.
     if (app.tooltip)
     {
@@ -1424,6 +1455,15 @@ void buildButtons()
                 break;
             case ArrowTool:
                 hint = L"Arrow (A)";
+                break;
+            case RotateCurvedArrow:
+                hint = L"Rotate only this curved arrow 90 degrees clockwise";
+                break;
+            case FlipCurvedArrow:
+                hint = L"Flip only this arrow's curve to the other side; keep its endpoints";
+                break;
+            case ReverseCurvedArrow:
+                hint = L"Reverse only this arrow's direction; keep the same curve";
                 break;
             case CheckTool:
                 hint = L"Check or X sticker (K); dropdown shows styles";
@@ -1500,6 +1540,10 @@ void buildButtons()
 }
 bool enabled(int id)
 {
+    if (curvedArrowCommand(id))
+        return hasImage() && curvedArrowSelected() && app.tool == Tool::Select &&
+               !app.erasing && !app.cropping && !app.pickingColor &&
+               length(app.document.items[app.document.selected].b - app.document.items[app.document.selected].a) >= .01f;
     if (id == Undo || id == Redo)
         return hasImage() && (id == Undo ? app.document.canUndo() : app.document.canRedo());
     if (id == NewSnip || id == InstantSnip)
@@ -1927,6 +1971,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     for (size_t index = 0; index < app.buttons.size(); ++index)
     {
         const auto &button = app.buttons[index];
+        if (curvedArrowCommand(button.command))
+            continue; // These selection controls are painted above the image below.
         auto r = button.rect;
         bool on = active(button.command) ||
                   (button.command == CircleStyleMenu &&
@@ -2193,6 +2239,19 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                      app.graphics.smallFont.get(), true);
         }
     }
+    for (size_t index = 0; index < app.buttons.size(); ++index)
+    {
+        const auto &button = app.buttons[index];
+        if (!curvedArrowCommand(button.command))
+            continue;
+        const auto r = button.rect;
+        const bool over = app.hover == button.command, available = enabled(button.command);
+        const bool down = app.pressed == static_cast<int>(index + 1) && over;
+        rounded({r.left, r.top + 2, r.right, r.bottom + 2}, rgb(215, 211, 230), 7);
+        panel(r, down ? rgb(219, 211, 248) : over && available ? rgb(233, 226, 255) : rgb(255, 255, 255),
+              rgb(199, 190, 227));
+        text(button.label, r, available ? Accent : Muted, app.graphics.smallFont.get(), true);
+    }
     std::wstring message = app.status;
     if (message.empty())
     {
@@ -2212,6 +2271,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                       : app.pickingColor ? L"Eyedropper: click the image to pick a color; Esc cancels"
                       : app.erasing ? L"Eraser: click or drag to delete whole annotations; Ctrl+Z undoes"
                       : app.textEdit ? L"Text: Ctrl+Enter finishes; Enter adds a line; Esc cancels"
+                      : curvedArrowSelected() ? L"Curved arrow: Rotate 90\u00B0, Flip curve, or Reverse; Ctrl+Z undoes"
                                      : hints[static_cast<int>(app.tool)];
         }
         else
@@ -3680,6 +3740,21 @@ void command(int id)
             repaint();
         }
         break;
+    case RotateCurvedArrow:
+    case FlipCurvedArrow:
+    case ReverseCurvedArrow:
+        if (enabled(id))
+        {
+            app.document.begin();
+            app.document.items[app.document.selected].editCurvedArrow(
+                id == RotateCurvedArrow ? CurvedArrowEdit::Rotate :
+                id == FlipCurvedArrow ? CurvedArrowEdit::Flip : CurvedArrowEdit::Reverse);
+            app.document.commit();
+            app.dirty = true;
+            updateTitle();
+            repaint();
+        }
+        break;
     case Clear:
         if (!app.document.items.empty())
         {
@@ -4433,7 +4508,9 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_LBUTTONDBLCLK:
     {
         Point screen{GET_X_LPARAM(lp) / app.dpi, GET_Y_LPARAM(lp) / app.dpi};
-        if (hasImage() && !app.erasing && canvasRect().contains(screen))
+        const bool onButton = std::any_of(app.buttons.begin(), app.buttons.end(),
+            [&](const Button &button) { return button.rect.contains(screen); });
+        if (!onButton && hasImage() && !app.erasing && canvasRect().contains(screen))
         {
             const Point point = app.view.toImage(screen);
             const int hit = app.document.hit(point, 0);
@@ -5517,6 +5594,138 @@ void testEraserTool()
                  SWP_NOZORDER | SWP_NOACTIVATE);
     buildButtons();
 }
+void testCurvedArrowControls()
+{
+    const auto originalOptions = app.exportOptions;
+    const auto originalTool = app.tool;
+    const float originalDpi = app.dpi;
+    RECT originalBounds{};
+    GetWindowRect(app.window, &originalBounds);
+    const auto colors = app.colors;
+    const auto styles = app.styles;
+    const bool preferencesDirty = app.toolPreferencesDirty;
+    app.exportOptions = {};
+    app.image = Bitmap::create(640, 360);
+    std::fill(app.image.pixels.begin(), app.image.pixels.end(), 255);
+    Annotation curved;
+    curved.kind = Tool::Arrow;
+    curved.style = 2;
+    curved.a = {200, 160};
+    curved.b = {400, 200};
+    Annotation other = curved;
+    other.style = 0;
+    other.a = {20, 300};
+    other.b = {120, 300};
+    auto button = [&](int id) -> Rect {
+        buildButtons();
+        const auto found = std::find_if(app.buttons.begin(), app.buttons.end(),
+            [&](const Button &b) { return b.command == id; });
+        if (found == app.buttons.end() || !enabled(id))
+            throw std::runtime_error("Curved arrow selection control is missing or disabled.");
+        return found->rect;
+    };
+    for (float dpi : {1.0f, 1.5f, 2.0f})
+    {
+        app.dpi = dpi;
+        SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(1000 * dpi),
+            static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        selectTool(Tool::Select);
+        for (float zoom : {.5f, 1.0f, 8.0f})
+        {
+            app.document.clear();
+            app.document.items = {curved, other};
+            app.document.selected = 0;
+            app.fit = false;
+            app.view.scale = zoom / dpi;
+            const auto canvas = canvasRect();
+            app.view.origin = Point{canvas.right / 2, (canvas.top + canvas.bottom) / 2} -
+                              curved.arrowSpine(.5f) * app.view.scale;
+            updateView();
+            const auto before = app.document.items;
+            const auto exportedBefore = renderedExport();
+            for (int id : {RotateCurvedArrow, FlipCurvedArrow, ReverseCurvedArrow})
+            {
+                app.document.selected = 0;
+                const Rect r = button(id);
+                if (!canvas.contains({r.left, r.top}) || !canvas.contains({r.right, r.bottom}))
+                    throw std::runtime_error("Curved arrow controls escaped the canvas.");
+                const auto click = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * dpi),
+                    static_cast<int>((r.top + r.bottom) / 2 * dpi));
+                SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, click);
+                // Real painting between press and release must retain the button hit target.
+                UpdateWindow(app.window);
+                SendMessageW(app.window, WM_LBUTTONUP, 0, click);
+                if (app.document.items[0] == curved || app.document.items[1] != other ||
+                    app.document.selected != 0 || app.drag != Drag::None || app.pressed ||
+                    GetCapture() == app.window || app.document.editing())
+                    throw std::runtime_error("Curved arrow click changed the wrong object or left an edit pending.");
+                const auto changed = app.document.items;
+                const auto exportedAfter = renderedExport();
+                if (exportedBefore.pixels == exportedAfter.pixels ||
+                    previewImage().pixels != exportedAfter.pixels ||
+                    app.graphics.decode(app.graphics.png(exportedAfter)).pixels != exportedAfter.pixels ||
+                    !changed[0].hit(changed[0].arrowSpine(.5f), 0))
+                    throw std::runtime_error("Curved arrow direction did not update preview, export or hit testing.");
+                command(Undo);
+                if (app.document.items != before || renderedExport().pixels != exportedBefore.pixels ||
+                    app.document.canUndo())
+                    throw std::runtime_error("Curved arrow action did not undo in one step.");
+                command(Redo);
+                if (app.document.items != changed || renderedExport().pixels != exportedAfter.pixels)
+                    throw std::runtime_error("Curved arrow redo did not restore exported pixels.");
+                command(Undo);
+            }
+            app.document.selected = 0;
+            if (dpi == 1 && zoom == 1)
+                saveBytes(L"curved-arrow-controls.png", app.graphics.png(renderEditorPreview()));
+            // Moving the arrow to the top/left edge keeps its controls reachable.
+            app.document.items[0].move({-200, -160});
+            app.fit = true;
+            updateView();
+            for (int id : {RotateCurvedArrow, FlipCurvedArrow, ReverseCurvedArrow}) button(id);
+            for (int selection : {-1, 1})
+            {
+                app.document.selected = selection;
+                buildButtons();
+                if (std::any_of(app.buttons.begin(), app.buttons.end(),
+                    [](const Button &b) { return curvedArrowCommand(b.command); }))
+                    throw std::runtime_error("Curved arrow controls appeared for another selection.");
+                const auto unchanged = app.document.items;
+                command(FlipCurvedArrow);
+                if (app.document.items != unchanged)
+                    throw std::runtime_error("A curved arrow action changed another selection.");
+            }
+        }
+    }
+    // A rapid second click must use the control even when it overlays a text annotation.
+    app.document.items = {curved, other};
+    app.document.selected = 0;
+    updateView();
+    const auto r = button(RotateCurvedArrow);
+    Annotation underControl;
+    underControl.kind = Tool::Text;
+    underControl.text = L"Text beneath selection controls";
+    underControl.a = app.view.toImage({r.left, r.top});
+    underControl.b = app.view.toImage({r.right, r.bottom});
+    app.document.items.push_back(underControl);
+    const auto doubleClick = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * app.dpi),
+        static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
+    SendMessageW(app.window, WM_LBUTTONDBLCLK, MK_LBUTTON, doubleClick);
+    SendMessageW(app.window, WM_LBUTTONUP, 0, doubleClick);
+    if (app.textEdit || app.document.selected != 0 || app.document.items[0] == curved ||
+        app.document.items[2] != underControl)
+        throw std::runtime_error("Double-clicking a curved arrow control edited underlying text.");
+    if (app.colors != colors || app.styles != styles || app.toolPreferencesDirty != preferencesDirty)
+        throw std::runtime_error("Curved arrow controls changed future tool preferences.");
+    releaseImage();
+    app.exportOptions = originalOptions;
+    app.tool = originalTool;
+    app.dpi = originalDpi;
+    SetWindowPos(app.window, nullptr, originalBounds.left, originalBounds.top,
+        originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+    buildButtons();
+}
 void testCropTool()
 {
     const auto options = app.exportOptions;
@@ -6189,7 +6398,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool selfTest = false, trayOnly = false, snipNow = false, verifyPreferences = false, shortcutTest = false,
          navigationTest = false, paletteTest = false, verifyPalette = false, eraserTest = false,
-         penSizeTest = false, verifyPenSize = false;
+         penSizeTest = false, verifyPenSize = false, arrowEditTest = false;
     for (int i = 1; i < argc; ++i)
     {
         if (wcscmp(argv[i], L"--self-test") == 0)
@@ -6208,6 +6417,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             app.smoke = paletteTest = true;
         else if (wcscmp(argv[i], L"--eraser-test") == 0)
             app.smoke = eraserTest = true;
+        else if (wcscmp(argv[i], L"--arrow-edit-test") == 0)
+            app.smoke = arrowEditTest = true;
         else if (wcscmp(argv[i], L"--pen-size-test") == 0)
             penSizeTest = true;
         else if (wcscmp(argv[i], L"--verify-pen-size-preferences") == 0)
@@ -6451,6 +6662,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     "no-op redo preservation, cached cursor/hits at 100/150/200% DPI and 50/100/800% zoom, toolbar layout.\n");
                 command(Exit);
             }
+            else if (arrowEditTest)
+            {
+                testCurvedArrowControls();
+                writeTestReport(L"arrow-edit-test-results.txt",
+                    "PASS: curved arrow rotate/flip/reverse mouse controls at 100/150/200% DPI and 50/100/800% zoom; "
+                    "selected object only, edge positioning, unchanged tool preferences, one-step undo/redo, "
+                    "hit testing, preview/export agreement and PNG round trips.\n");
+                command(Exit);
+            }
             else if (shortcutTest)
             {
                 testShortcutFields();
@@ -6471,6 +6691,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 testHighlightTool();
                 testPaletteTools();
                 testEraserTool();
+                testCurvedArrowControls();
                 testCropTool();
                 testCaptureShortcuts();
                 auto clickButton = [&](int id, bool cancel = false) {
@@ -7831,7 +8052,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     {
         result = 1;
         if (selfTest || app.smoke || verifyPreferences || verifyPalette || penSizeTest || verifyPenSize || app.resizeTest)
-            writeTestReport(penSizeTest ? L"pen-size-test-results.txt" : verifyPenSize ? L"pen-size-preference-results.txt" : eraserTest ? L"eraser-test-results.txt" : verifyPalette ? L"palette-preference-results.txt" : paletteTest ? L"palette-test-results.txt" : navigationTest ? L"navigation-test-results.txt" : shortcutTest ? L"shortcut-test-results.txt" : app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
+            writeTestReport(arrowEditTest ? L"arrow-edit-test-results.txt" : penSizeTest ? L"pen-size-test-results.txt" : verifyPenSize ? L"pen-size-preference-results.txt" : eraserTest ? L"eraser-test-results.txt" : verifyPalette ? L"palette-preference-results.txt" : paletteTest ? L"palette-test-results.txt" : navigationTest ? L"navigation-test-results.txt" : shortcutTest ? L"shortcut-test-results.txt" : app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
                             selfTest ? L"self-test-results.txt" : L"smoke-test-results.txt",
                             std::string("FAIL: ") + exception.what() + "\n");
         else

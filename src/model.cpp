@@ -45,6 +45,29 @@ float segmentDistance(Point p, Point a, Point b)
     float t = n > 0 ? std::clamp((w.x * v.x + w.y * v.y) / n, 0.0f, 1.0f) : 0;
     return length(p - (a + v * t));
 }
+bool Annotation::editCurvedArrow(CurvedArrowEdit edit)
+{
+    if (kind != Tool::Arrow || style != 2 || length(b - a) < .01f)
+        return false;
+    if (edit == CurvedArrowEdit::Rotate)
+    {
+        const Point center = (a + b) * .5f;
+        auto rotate = [&](Point p) {
+            const Point d = p - center;
+            return center + Point{-d.y, d.x};
+        };
+        a = rotate(a);
+        b = rotate(b);
+    }
+    else
+    {
+        // Reversing the endpoints also reverses their normal; keep the arc in place.
+        if (edit == CurvedArrowEdit::Reverse)
+            std::swap(a, b);
+        curveFlipped = !curveFlipped;
+    }
+    return true;
+}
 Point Annotation::arrowSpine(float t) const
 {
     Point v = b - a;
@@ -52,7 +75,7 @@ Point Annotation::arrowSpine(float t) const
     if (style != 2 || len < .01f)
         return a + v * t;
     Point n{-v.y / len, v.x / len};
-    return a + v * t - n * (len * 1.2f * t * (1 - t));
+    return a + v * t - n * ((curveFlipped ? -1 : 1) * len * 1.2f * t * (1 - t));
 }
 std::vector<Point> Annotation::arrowContour() const
 {
@@ -86,7 +109,8 @@ std::vector<Point> Annotation::arrowContour() const
     float headHalf = std::max(half * 2.1f, length(b - base) * .60f);
     auto side = [&](int step, float sign) {
         float fraction = step / 48.0f, t = baseT * fraction;
-        Point tangent = style == 2 ? v - n * (len * 1.2f * (1 - 2 * t)) : v;
+        Point tangent = style == 2
+            ? v - n * ((curveFlipped ? -1 : 1) * len * 1.2f * (1 - 2 * t)) : v;
         tangent = tangent * (1 / length(tangent));
         Point normal{-tangent.y, tangent.x};
         if (step == 48)
@@ -426,6 +450,48 @@ void runModelTests()
     require(!arrow.hit({10, 90}, 2));
     arrow.move({-20, 30});
     require(arrow.a.x == -10 && arrow.b.y == 130);
+    for (Point direction : {Point{160, 0}, Point{0, 160}, Point{-100, 80}, Point{1, 1}})
+    {
+        Annotation curved = arrow;
+        curved.style = 2;
+        curved.a = {100, 100};
+        curved.b = curved.a + direction;
+        const auto original = curved;
+        const Point center = (curved.a + curved.b) * .5f;
+        require(curved.editCurvedArrow(CurvedArrowEdit::Flip));
+        require(curved.a == original.a && curved.b == original.b);
+        for (float t : {.2f, .5f, .8f})
+        {
+            require(length(curved.arrowSpine(t) + original.arrowSpine(t) -
+                           (original.a + direction * t) * 2) < .001f);
+            require(curved.hit(curved.arrowSpine(t), 0));
+        }
+        require(curved.editCurvedArrow(CurvedArrowEdit::Flip) && curved == original);
+        require(curved.editCurvedArrow(CurvedArrowEdit::Reverse));
+        require(curved.a == original.b && curved.b == original.a);
+        for (float t : {.2f, .5f, .8f})
+            require(length(curved.arrowSpine(t) - original.arrowSpine(1 - t)) < .001f);
+        require(curved.editCurvedArrow(CurvedArrowEdit::Reverse) && curved == original);
+        require(curved.editCurvedArrow(CurvedArrowEdit::Rotate));
+        require(length((curved.a + curved.b) * .5f - center) < .001f);
+        require(length(curved.b - curved.a - Point{-direction.y, direction.x}) < .001f);
+        for (int i = 0; i < 3; ++i) require(curved.editCurvedArrow(CurvedArrowEdit::Rotate));
+        require(curved == original);
+    }
+    for (int style : {0, 1, 3, 4})
+    {
+        Annotation straight = arrow;
+        straight.style = static_cast<uint8_t>(style);
+        const auto unchanged = straight;
+        require(!straight.editCurvedArrow(CurvedArrowEdit::Rotate) && straight == unchanged);
+    }
+    Annotation other = arrow;
+    other.kind = Tool::Line;
+    other.style = 2;
+    require(!other.editCurvedArrow(CurvedArrowEdit::Flip));
+    other.kind = Tool::Arrow;
+    other.b = other.a;
+    require(!other.editCurvedArrow(CurvedArrowEdit::Reverse));
     Annotation pen;
     pen.points = {{0, 0}, {10, 20}};
     pen.resize(pen.bounds(), {10, 10, 30, 50});

@@ -62,6 +62,7 @@ constexpr Color rgb(unsigned r, unsigned g, unsigned b)
 {
     return r | (g << 8) | (b << 16);
 }
+enum class CurvedArrowEdit { Rotate, Flip, Reverse };
 struct Annotation
 {
     Tool kind = Tool::Pen;
@@ -73,7 +74,9 @@ struct Annotation
     std::wstring text;
     float fontSize = 24, textWidth = 600;
     bool bold = false, boxed = false;
+    bool curveFlipped = false;
     bool operator==(const Annotation &) const = default;
+    bool editCurvedArrow(CurvedArrowEdit edit);
     Point arrowSpine(float fraction) const;
     std::vector<Point> arrowContour() const;
     Rect bounds() const;

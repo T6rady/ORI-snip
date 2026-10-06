@@ -77,6 +77,7 @@ enum Command
     RecentClose,
     RecentNewer,
     RecentOlder,
+    AutoCopy,
     ColorFirst = 2000,
     ShowEditor = 1200,
     CircleStyleMenu = 1300,
@@ -224,6 +225,7 @@ struct Application
          spaceDown = false;
     bool selecting = false, changed = false, smoke = false;
     bool toolPreferencesDirty = false;
+    bool autoCopy = true;
     bool exportPreferencesDirty = false;
     ULONGLONG copyFlashStarted = 0;
     HMENU logoMenu = nullptr;
@@ -469,6 +471,7 @@ void loadToolPreferences()
         }
     }
     app.paletteDirty = false;
+    app.autoCopy = GetPrivateProfileIntW(L"Settings", L"AutoCopy", 1, app.iniPath.c_str()) != 0;
     if (!app.rendererSpecified)
         app.softwareRendering =
             GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 0;
@@ -3530,11 +3533,11 @@ void startCopyFeedback()
     SetTimer(app.window, CopyFlashTimer, 16, nullptr);
     repaint();
 }
-void copyImage()
+void copyImage(bool automatic = false)
 {
     if (!hasImage())
         return;
-    auto bitmap = renderedExport();
+    const auto &bitmap = previewImage();
     auto png = app.graphics.png(bitmap);
     if (!copyBitmap(app.window, bitmap, png))
     {
@@ -3543,8 +3546,10 @@ void copyImage()
     }
     app.dirty = false;
     updateTitle();
-    startCopyFeedback();
-    status(L"Copied image and annotations - ready to paste");
+    if (!automatic)
+        startCopyFeedback();
+    status(automatic ? L"Copied automatically - ready to paste; Ctrl+C copies your edits"
+                     : L"Copied image and annotations - ready to paste");
 }
 bool existingFolder(const std::wstring &path)
 {
@@ -3695,6 +3700,7 @@ void trayMenu()
     AppendMenuW(menu, MF_STRING, InstantSnip, L"Capture all monitors now");
     AppendMenuW(menu, MF_STRING, ShowEditor, L"Open editor");
     AppendMenuW(menu, MF_STRING, Settings, L"Keyboard shortcuts...");
+    AppendMenuW(menu, MF_STRING | (app.autoCopy ? MF_CHECKED : 0), AutoCopy, L"Auto copy new snips");
     AppendMenuW(menu, MF_STRING, SaveLocation, L"Save location...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, Exit, L"Exit Snipper");
@@ -4048,6 +4054,13 @@ void command(int id)
     case Copy:
         copyImage();
         break;
+    case AutoCopy:
+        if (!WritePrivateProfileStringW(L"Settings", L"AutoCopy", app.autoCopy ? L"0" : L"1",
+                                        app.iniPath.c_str()))
+            throw std::runtime_error("Auto copy setting could not be saved. Keep Snipper in a writable folder.");
+        app.autoCopy = !app.autoCopy;
+        status(app.autoCopy ? L"Auto copy enabled for new snips" : L"Auto copy disabled - use Copy or Ctrl+C");
+        break;
     case Save:
         saveImage();
         break;
@@ -4301,6 +4314,18 @@ void acceptCapture(Bitmap captured)
     app.status.clear();
     updateTitle();
     showEditor();
+    // Diagnostic capture suites must leave the user's clipboard untouched.
+    if (app.autoCopy && !app.smoke && !app.resizeTest)
+    {
+        try
+        {
+            copyImage(true);
+        }
+        catch (const std::exception &)
+        {
+            status(L"Could not auto copy. Press Ctrl+C to retry.");
+        }
+    }
 }
 void startSnip(bool instant, bool allMonitors)
 {
@@ -4323,7 +4348,8 @@ void startSnip(bool instant, bool allMonitors)
         if (allMonitors)
         {
             acceptCapture(std::move(app.desktop));
-            status(L"Captured all monitors with the pointer - Crop (C) keeps just the area you need");
+            if (!app.autoCopy || app.smoke || app.resizeTest)
+                status(L"Captured all monitors with the pointer - Crop (C) keeps just the area you need");
         }
         else if (instant)
             openOverlay();
@@ -4504,6 +4530,7 @@ HMENU createMenu()
     AppendMenuW(view, MF_STRING, ToggleTools, L"&Tools and shapes row");
     AppendMenuW(view, MF_STRING, ToggleFormatting, L"Color and &size row");
     AppendMenuW(settings, MF_STRING, Settings, L"&Keyboard shortcuts...");
+    AppendMenuW(settings, MF_STRING, AutoCopy, L"Auto &copy new snips");
     AppendMenuW(settings, MF_STRING, RenderingSettings, L"&Rendering...");
     AppendMenuW(settings, MF_STRING, SaveLocation, L"Save &location...");
     AppendMenuW(settings, MF_STRING, Startup, L"Run at &sign-in");
@@ -4540,6 +4567,7 @@ HMENU createMenu()
 void updateMenus()
 {
     HMENU menu = app.fullScreen ? app.windowedMenu : GetMenu(app.window);
+    CheckMenuItem(menu, AutoCopy, MF_BYCOMMAND | (app.autoCopy ? MF_CHECKED : MF_UNCHECKED));
     for (int row = 0; row < 3; ++row)
         CheckMenuItem(menu, ToggleActions + row,
                       MF_BYCOMMAND |

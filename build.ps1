@@ -36,6 +36,12 @@ if ($Test) {
         '-o',(Join-Path $taskBuild 'clipboard_test.exe'),'-municode','-static','-s','-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32')
     & $taskCompiler @taskClipboardArguments
     if ($LASTEXITCODE -ne 0) { throw 'Clipboard test compilation failed.' }
+    $taskAutoCopyArguments = @($taskArguments)
+    $taskAutoCopyArguments[$taskAutoCopyArguments.IndexOf((Join-Path $taskRoot 'src\main.cpp'))] = Join-Path $taskRoot 'tests\autocopy.cpp'
+    $taskAutoCopyArguments[$taskAutoCopyArguments.IndexOf((Join-Path $taskDist $OutputName))] = Join-Path $taskBuild 'autocopy_test.exe'
+    $taskAutoCopyArguments = @($taskAutoCopyArguments | Where-Object { $_ -ne '-mwindows' })
+    & $taskCompiler @taskAutoCopyArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Auto copy test compilation failed.' }
     Push-Location $taskBuild
     try {
         $taskProcess = Start-Process -FilePath (Join-Path $taskDist $OutputName) -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
@@ -43,5 +49,7 @@ if ($Test) {
         if ($taskProcess.ExitCode -ne 0) { throw 'Native self-test failed.' }
         & (Join-Path $taskBuild 'clipboard_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Isolated clipboard test failed.' }
+        & (Join-Path $taskBuild 'autocopy_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Isolated auto copy test failed.' }
     } finally { Pop-Location }
 }

@@ -74,3 +74,7 @@ Fault injection hooks exist only in `TIGER_SNIP_TESTING` builds. Some integratio
 `IT-WALKTHROUGH.md` is the plain-language **open-only** list; `IT-REVIEW.md` has the technical evidence. Prioritize **22 now**. Previously recommended follow-ups were **12** (separate developer tests), **20** (interrupted-save leftovers/unique names), and **28** (rapid second-launch race). **8 and 27** need owner/support details and a small IT pilot. Other memory, accessibility, performance, and style work depends on actual requirements and measurements.
 
 The user asked to push the completed work and prepare this handoff. Check Git status/history for the published revision before editing. Do not treat the next performance change as a mandate to finish every remaining audit item.
+
+## Git checkpoint
+
+Tested source and release-artifact snapshot: 41023eba83ebfae3466e4ca829729e95a0b63985. A following documentation commit records this checkpoint. The text-box optimization has not been implemented yet; it is the selected next task.

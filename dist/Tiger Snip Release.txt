@@ -5,8 +5,8 @@ Installation: current user; local app and Start menu shortcut; no automatic star
 Settings: current user LocalAppData; personal preferences are excluded from this package.
 Build: C++20, static runtime; package authored with Windows Installer and makecab.
 Signing: unsigned. IT deployment policy remains to be validated.
-Source base commit: a3bca24c9340a5b3c560da5c4f97592c8589ffce
-Working tree has uncommitted changes: True
+Source base commit at build time: a3bca24c9340a5b3c560da5c4f97592c8589ffce
+Working tree had uncommitted changes at build time: True
 
 SHA256:
 F4DFA0D91A94F9775D7E13318FC83D0265207A8A3CD40E5D56188197451B7992  Tiger Snip Setup.msi
@@ -46,3 +46,6 @@ AB2955F6D737944EE4DE6B54633A2F500E2432A049FE42E5821AE089F345E397  resources\app.
 DF629689A96E04057DC946667382D314DB207F638660FAF7FB476F8DB699D17F  resources\tiger-snip.ico
 649B51E44A5D1CECC9E9264D9DB7743B8C5D0784BCE53168ACA400B81C724F3B  resources\app-icon.png
 9C43F117D7A12488B118F67309D5994BB7221F2362DBA7CEB7F960F48AC6CA09  scripts\make-icon.ps1
+
+Tested source/artifact snapshot commit: 41023eba83ebfae3466e4ca829729e95a0b63985
+This revision contains the tested source and unchanged EXE/MSI. Input hashes record working-file bytes at build time; Git line-ending conversion can change text-file byte hashes.

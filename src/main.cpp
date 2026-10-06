@@ -72,9 +72,11 @@ enum Command
     InstantSnip,
     CropTool,
     EraserTool,
-    RotateCurvedArrow,
     FlipCurvedArrow,
-    ReverseCurvedArrow,
+    RecentSnips,
+    RecentClose,
+    RecentNewer,
+    RecentOlder,
     ColorFirst = 2000,
     ShowEditor = 1200,
     CircleStyleMenu = 1300,
@@ -84,7 +86,8 @@ enum Command
     StyleChoiceFirst = 1400,
     TextSizeFirst = 1500,
     TextEditControl = 1600,
-    LogoStyleFirst = 1800
+    LogoStyleFirst = 1800,
+    RecentChoiceFirst = 2200
 };
 constexpr const wchar_t *LogoStyleNames[] = {L"S - White badge", L"S - Soft watermark",
     L"Tiger - White badge", L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
@@ -135,6 +138,22 @@ enum class Drag
     Crop,
     Erase
 };
+struct RecentSnip
+{
+    // Only inactive captures own the full editing state; the active one lives in app.
+    Bitmap image, cropSource, thumbnail;
+    Com<ID2D1Bitmap> displayThumbnail;
+    Document document;
+    std::optional<Rect> appliedCrop;
+    View view;
+    Rect viewport;
+    bool fit = true, dirty = false;
+    float dpi = 1;
+    std::wstring savePath;
+    SYSTEMTIME captured{};
+    unsigned sequence = 0;
+};
+constexpr size_t RecentLimit = 10;
 struct Application
 {
     bool resizeTest = false, resizeTestIdle = false, softwareRendering = false, rendererSpecified = false,
@@ -184,6 +203,10 @@ struct Application
     Color penCursorColor = 0;
     Tool penCursorTool = Tool::Pen;
     Document document;
+    std::vector<RecentSnip> recent;
+    int activeRecent = -1, recentScroll = 0, recentFocus = 0;
+    bool recentOpen = false;
+    unsigned recentSequence = 0;
     Tool tool = Tool::Select;
     bool erasing = false;
     std::array<Color, 9> colors = {Palette[0], Palette[0], Palette[0],
@@ -287,6 +310,12 @@ void finishTextEditing(bool cancel = false, bool selectAfter = true);
 void syncTextEditor();
 void beginTextEditing(Point point, int existing = -1);
 void buildButtons();
+void refreshRecentThumbnail();
+void stashRecentSnip();
+void restoreRecentSnip(int index);
+void closeRecent();
+bool recentPanelCommand(int id);
+Rect recentPanelRect();
 bool textMode();
 Rect clientDips();
 bool paletteCommand(int id)
@@ -370,6 +399,10 @@ void resetPreview()
     app.previewItems.clear();
     app.previewValid = false;
 }
+void resetRecentDisplays()
+{
+    for (auto &snip : app.recent) snip.displayThumbnail.reset();
+}
 const Bitmap &previewImage()
 {
     const int editingText = app.textEdit ? app.document.selected : -1;
@@ -399,7 +432,7 @@ bool curvedArrowSelected()
 }
 bool curvedArrowCommand(int id)
 {
-    return id >= RotateCurvedArrow && id <= ReverseCurvedArrow;
+    return id == FlipCurvedArrow;
 }
 Color activeColor()
 {
@@ -739,6 +772,8 @@ void updateTitle()
 }
 void releaseImage()
 {
+    closeRecent();
+    app.activeRecent = -1;
     stopSizeRepeat();
     finishDrag(true);
     KillTimer(app.window, CopyFlashTimer);
@@ -759,9 +794,113 @@ void releaseImage()
     app.view = {};
     app.viewViewport = {};
     app.workspaceBrush.reset();
+    resetRecentDisplays();
     app.target.reset();
     app.status.clear();
     updateTitle();
+}
+Bitmap recentThumbnail(const Bitmap &source)
+{
+    const float scale = std::min({1.0f, 400.0f / source.width, 224.0f / source.height});
+    auto thumb = Bitmap::create(std::max(1, static_cast<int>(std::round(source.width * scale))),
+                               std::max(1, static_cast<int>(std::round(source.height * scale))));
+    for (int y = 0; y < thumb.height; ++y)
+        for (int x = 0; x < thumb.width; ++x)
+        {
+            const float sx = std::clamp((x + .5f) * source.width / thumb.width - .5f, 0.0f, source.width - 1.0f);
+            const float sy = std::clamp((y + .5f) * source.height / thumb.height - .5f, 0.0f, source.height - 1.0f);
+            const int left = static_cast<int>(sx), top = static_cast<int>(sy);
+            const float fx = sx - left, fy = sy - top;
+            float channels[4]{};
+            for (int dy = 0; dy < 2; ++dy)
+                for (int dx = 0; dx < 2; ++dx)
+                {
+                    const size_t p = (static_cast<size_t>(std::min(top + dy, source.height - 1)) * source.width +
+                                      std::min(left + dx, source.width - 1)) * 4;
+                    const float weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+                    channels[3] += source.pixels[p + 3] * weight;
+                    for (int c = 0; c < 3; ++c)
+                        channels[c] += source.pixels[p + c] * source.pixels[p + 3] / 255.0f * weight;
+                }
+            const size_t out = (static_cast<size_t>(y) * thumb.width + x) * 4;
+            for (int c = 0; c < 3; ++c)
+                thumb.pixels[out + c] = channels[3] > 0
+                    ? static_cast<uint8_t>(std::clamp(std::lround(channels[c] * 255 / channels[3]), 0L, 255L)) : 0;
+            thumb.pixels[out + 3] = static_cast<uint8_t>(std::lround(channels[3]));
+        }
+    return thumb;
+}
+void refreshRecentThumbnail()
+{
+    if (hasImage() && app.activeRecent >= 0 && app.activeRecent < static_cast<int>(app.recent.size()))
+    {
+        auto &snip = app.recent[app.activeRecent];
+        snip.thumbnail = recentThumbnail(previewImage());
+        snip.displayThumbnail.reset();
+    }
+}
+void stashRecentSnip()
+{
+    if (!hasImage() || app.activeRecent < 0 || app.activeRecent >= static_cast<int>(app.recent.size()))
+        return;
+    finishDrag(true);
+    finishTextEditing();
+    refreshRecentThumbnail();
+    auto &saved = app.recent[app.activeRecent];
+    saved.image = std::move(app.image);
+    saved.cropSource = std::move(app.cropSource);
+    saved.document = std::move(app.document);
+    saved.appliedCrop = app.appliedCrop;
+    saved.view = app.view;
+    saved.viewport = app.viewViewport;
+    saved.fit = app.fit;
+    saved.dirty = app.dirty;
+    saved.dpi = app.dpi;
+    saved.savePath = std::move(app.savePath);
+    app.activeRecent = -1;
+}
+void restoreRecentSnip(int index)
+{
+    if (index < 0 || index >= static_cast<int>(app.recent.size()) || app.capturePending || app.overlay)
+        return;
+    closeRecent();
+    if (index == app.activeRecent)
+        return;
+    stashRecentSnip();
+    releaseImage();
+    auto &saved = app.recent[index];
+    app.image = std::move(saved.image);
+    app.cropSource = std::move(saved.cropSource);
+    app.document = std::move(saved.document);
+    app.appliedCrop = saved.appliedCrop;
+    app.view = saved.view;
+    if (saved.dpi != app.dpi)
+    {
+        const Point center{(saved.viewport.left + saved.viewport.right) / 2,
+                           (saved.viewport.top + saved.viewport.bottom) / 2};
+        const auto focus = saved.view.toImage(center);
+        app.view.scale *= saved.dpi / app.dpi;
+        app.view.origin = center - focus * app.view.scale;
+    }
+    app.viewViewport = saved.viewport;
+    app.fit = saved.fit;
+    app.dirty = saved.dirty;
+    app.savePath = std::move(saved.savePath);
+    app.activeRecent = index;
+    app.tool = Tool::Select;
+    app.spaceDown = false;
+    updateTitle();
+    buildButtons();
+    repaint();
+}
+void closeRecent()
+{
+    if (app.recentOpen)
+    {
+        app.recentOpen = false;
+        app.hover = 0;
+        repaint();
+    }
 }
 Rect navigationRect()
 {
@@ -1073,10 +1212,14 @@ HCURSOR editorCursor(Point point)
         (onCanvas && app.spaceDown && canPanImage()))
         return currentGrabCursor(app.drag == Drag::Pan);
     const bool onButton = std::any_of(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
+        if (app.recentOpen && recentPanelRect().contains(point) && !recentPanelCommand(b.command))
+            return false;
         return b.rect.contains(point) && enabled(b.command);
     });
     if (onButton)
         return LoadCursorW(nullptr, IDC_HAND);
+    if (app.recentOpen && recentPanelRect().contains(point))
+        return LoadCursorW(nullptr, IDC_ARROW);
     if (onCanvas && app.pickingColor)
         return LoadCursorW(nullptr, IDC_CROSS);
     if (onCanvas && app.cropping)
@@ -1255,6 +1398,28 @@ struct ToolbarLayout
 {
     Rect draw, shapes, formatting;
 };
+bool recentChoice(int id)
+{
+    return id >= RecentChoiceFirst && id < RecentChoiceFirst + static_cast<int>(app.recent.size());
+}
+bool recentPanelCommand(int id)
+{
+    return recentChoice(id) || id == RecentClose || id == RecentNewer || id == RecentOlder;
+}
+int recentVisibleRows()
+{
+    const float top = app.fullScreen ? 8 : (!(app.collapsedRows & 1) ? 55 : 28);
+    return std::clamp(static_cast<int>((clientDips().bottom - StatusHeight - top - 90) / 112), 1, 5);
+}
+Rect recentPanelRect()
+{
+    const auto client = clientDips();
+    const int rows = std::min(recentVisibleRows(), std::max(1, (static_cast<int>(app.recent.size()) + 1) / 2));
+    const float width = std::min(384.0f, client.width() - 16), height = 82 + rows * 112.0f;
+    const float top = app.fullScreen ? client.bottom - StatusHeight - height - 8
+        : (!(app.collapsedRows & 1) ? 55 : 28);
+    return {client.right - width - 8, top, client.right - 8, top + height};
+}
 ToolbarLayout toolbarLayout()
 {
     const float width = clientDips().right;
@@ -1292,6 +1457,8 @@ void buildButtons()
         add(FullScreen, L"", 36, 11);
         x = 344;
         add(CropTool, L"Crop", 82, 11);
+        x = clientDips().right - 350;
+        add(RecentSnips, L"Recent", 114, 11);
         x = clientDips().right - 226;
         add(Copy, L"Copy", 114, 11);
         x += 6;
@@ -1363,6 +1530,7 @@ void buildButtons()
         add(FullScreen, L"Exit full screen", 130, y, 24);
         add(Fit, L"Fit", 48, y, 24);
         add(Actual, L"100%", 64, y, 24);
+        add(RecentSnips, L"Recent", 114, y, 24);
     }
 
     if (!hasImage())
@@ -1379,16 +1547,37 @@ void buildButtons()
         const auto canvas = canvasRect(), box = app.document.items[app.document.selected].bounds();
         const auto a = app.view.toScreen({box.left, box.top});
         const auto b = app.view.toScreen({box.right, box.bottom});
-        constexpr float width = 242, height = 28, margin = 8;
+        constexpr float width = 58, height = 28, margin = 8;
         if (b.x >= canvas.left && a.x <= canvas.right && b.y >= canvas.top && a.y <= canvas.bottom &&
             canvas.width() >= width + margin * 2 && canvas.height() >= height + margin * 2)
         {
             x = std::clamp((a.x + b.x - width) / 2, canvas.left + margin, canvas.right - width - margin);
             const float y = std::clamp(a.y - height - 12 >= canvas.top + margin
                 ? a.y - height - 12 : b.y + 12, canvas.top + margin, canvas.bottom - height - margin);
-            add(RotateCurvedArrow, L"Rotate 90\u00B0", 82, y, height);
-            add(FlipCurvedArrow, L"Flip curve", 78, y, height);
-            add(ReverseCurvedArrow, L"Reverse", 74, y, height);
+            add(FlipCurvedArrow, L"Flip", width, y, height);
+        }
+    }
+
+    if (app.recentOpen)
+    {
+        const auto panel = recentPanelRect();
+        const int rows = recentVisibleRows(), totalRows = (static_cast<int>(app.recent.size()) + 1) / 2;
+        app.recentScroll = std::clamp(app.recentScroll, 0, std::max(0, totalRows - rows));
+        x = panel.right - 40;
+        add(RecentClose, L"\u00D7", 28, panel.top + 10, 28);
+        const float cellWidth = (panel.width() - 38) / 2;
+        for (int slot = 0; slot < rows * 2; ++slot)
+        {
+            const int index = static_cast<int>(app.recent.size()) - 1 - app.recentScroll * 2 - slot;
+            if (index < 0) break;
+            x = panel.left + 14 + (slot % 2) * (cellWidth + 10);
+            add(RecentChoiceFirst + index, L"", cellWidth, panel.top + 48 + (slot / 2) * 112, 104);
+        }
+        if (totalRows > rows)
+        {
+            x = panel.right - 144;
+            add(RecentNewer, L"Newer", 60, panel.bottom - 30, 24);
+            add(RecentOlder, L"Older", 60, panel.bottom - 30, 24);
         }
     }
 
@@ -1425,6 +1614,12 @@ void buildButtons()
             case Save:
                 hint = L"Save PNG (Ctrl+S)";
                 break;
+            case RecentSnips:
+                hint = L"Reopen one of the last 10 snips from this session (Ctrl+Shift+R)";
+                break;
+            case RecentClose:
+                hint = L"Close recent snips (Esc)";
+                break;
             case SelectTool:
                 hint = L"Select, move, and resize (V)";
                 break;
@@ -1456,14 +1651,8 @@ void buildButtons()
             case ArrowTool:
                 hint = L"Arrow (A)";
                 break;
-            case RotateCurvedArrow:
-                hint = L"Rotate only this curved arrow 90 degrees clockwise";
-                break;
             case FlipCurvedArrow:
                 hint = L"Flip only this arrow's curve to the other side; keep its endpoints";
-                break;
-            case ReverseCurvedArrow:
-                hint = L"Reverse only this arrow's direction; keep the same curve";
                 break;
             case CheckTool:
                 hint = L"Check or X sticker (K); dropdown shows styles";
@@ -1518,6 +1707,8 @@ void buildButtons()
             default: {
                 if (paletteCommand(b.command))
                     hint = L"Use this color; right-click to edit or delete";
+                else if (recentChoice(b.command))
+                    hint = L"Reopen this snip with its annotations, crop, and undo history";
             }
             }
             TOOLINFOW info{};
@@ -1540,6 +1731,14 @@ void buildButtons()
 }
 bool enabled(int id)
 {
+    if (id == RecentSnips || recentPanelCommand(id))
+    {
+        if (app.recent.empty() || app.capturePending || app.overlay) return false;
+        if (id == RecentNewer) return app.recentScroll > 0;
+        if (id == RecentOlder) return app.recentScroll + recentVisibleRows() <
+            (static_cast<int>(app.recent.size()) + 1) / 2;
+        return id == RecentSnips || app.recentOpen;
+    }
     if (curvedArrowCommand(id))
         return hasImage() && curvedArrowSelected() && app.tool == Tool::Select &&
                !app.erasing && !app.cropping && !app.pickingColor &&
@@ -1556,6 +1755,7 @@ bool enabled(int id)
 }
 bool active(int id)
 {
+    if (id == RecentSnips) return app.recentOpen;
     if (id == EraserTool)
         return app.erasing;
     if (app.erasing && (id == TextTool || id == HighlightTool || (id >= SelectTool && id <= LineTool)))
@@ -1612,6 +1812,7 @@ void ensureTarget()
     }
     app.workspaceBrush.reset();
     app.displayBitmap.reset();
+    resetRecentDisplays();
     app.graphics.initialize();
     auto properties = D2D1::RenderTargetProperties(app.softwareRendering
         ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT);
@@ -1726,6 +1927,13 @@ void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Poin
     };
     switch (id)
     {
+    case RecentSnips:
+        rt->DrawEllipse(D2D1::Ellipse({origin.x + 11, origin.y + 10}, 7, 7), brush, 1.7f);
+        line(4, 2, 4, 7);
+        line(4, 7, 9, 7);
+        line(11, 6, 11, 10);
+        line(11, 10, 15, 12);
+        break;
     case NewSnip:
         line(2, 7, 2, 2);
         line(2, 2, 7, 2);
@@ -1930,9 +2138,9 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     if (!app.fullScreen && !(app.collapsedRows & 1))
     {
         divider(180, 19, 39);
-        if (hasImage() && client.right > 960)
+        if (hasImage() && client.right > 1100)
             text(std::to_wstring(app.image.width) + L" \u00D7 " + std::to_wstring(app.image.height),
-                 {client.right - 365, 11, client.right - 238, 47}, Muted,
+                 {client.right - 490, 11, client.right - 362, 47}, Muted,
                  app.graphics.smallFont.get(), true);
     }
     const auto layout = toolbarLayout();
@@ -1971,7 +2179,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     for (size_t index = 0; index < app.buttons.size(); ++index)
     {
         const auto &button = app.buttons[index];
-        if (curvedArrowCommand(button.command))
+        if (curvedArrowCommand(button.command) || recentPanelCommand(button.command))
             continue; // These selection controls are painted above the image below.
         auto r = button.rect;
         bool on = active(button.command) ||
@@ -2101,6 +2309,14 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                            {r.left + inset, (r.top + r.bottom) / 2 - 10}, fg);
             text(copied ? L"Copied!" : button.label,
                  {r.left + inset + 27, r.top, r.right - 4, r.bottom}, fg, app.graphics.font.get());
+        }
+        else if (button.command == RecentSnips)
+        {
+            drawUIIcon(rt, brush.get(), RecentSnips, {r.left + 8, (r.top + r.bottom) / 2 - 10}, fg);
+            text(L"Recent", {r.left + 32, r.top, r.right - 26, r.bottom}, fg, app.graphics.smallFont.get());
+            rounded({r.right - 23, r.top + 7, r.right - 5, r.bottom - 7}, rgb(255, 255, 255), 4);
+            text(std::to_wstring(app.recent.size()), {r.right - 23, r.top, r.right - 5, r.bottom},
+                 available ? Accent : Muted, app.graphics.smallFont.get(), true);
         }
         else if (button.command == Undo || button.command == Redo ||
                  button.command == CustomColor || button.command == Eyedropper)
@@ -2271,7 +2487,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                       : app.pickingColor ? L"Eyedropper: click the image to pick a color; Esc cancels"
                       : app.erasing ? L"Eraser: click or drag to delete whole annotations; Ctrl+Z undoes"
                       : app.textEdit ? L"Text: Ctrl+Enter finishes; Enter adds a line; Esc cancels"
-                      : curvedArrowSelected() ? L"Curved arrow: Rotate 90\u00B0, Flip curve, or Reverse; Ctrl+Z undoes"
+                      : curvedArrowSelected() ? L"Curved arrow: Flip changes the bend; Ctrl+Z undoes"
                                      : hints[static_cast<int>(app.tool)];
         }
         else
@@ -2281,7 +2497,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     if (!app.fullScreen)
         rt->FillEllipse(D2D1::Ellipse({22, client.bottom - StatusHeight / 2}, 3, 3), brush.get());
     text(message,
-         {app.fullScreen ? 282.0f : 34.0f, client.bottom - StatusHeight,
+         {app.fullScreen ? 402.0f : 34.0f, client.bottom - StatusHeight,
           client.right - (hasImage() ? 292 : 14), client.bottom},
          Muted, app.graphics.smallFont.get());
     if (hasImage())
@@ -2290,6 +2506,67 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                  std::to_wstring(app.image.height),
              {client.right - 190, client.bottom - StatusHeight, client.right - 12, client.bottom},
              Muted, app.graphics.smallFont.get(), true);
+    if (app.recentOpen)
+    {
+        const auto r = recentPanelRect();
+        rounded({r.left - 2, r.top + 5, r.right + 2, r.bottom + 6}, rgb(213, 211, 225), 14);
+        panel(r, rgb(255, 255, 255), rgb(224, 222, 236));
+        text(L"Recent snips", {r.left + 16, r.top + 10, r.right - 120, r.top + 38}, Ink,
+             app.graphics.font.get());
+        text(std::to_wstring(app.recent.size()) + L" of 10", {r.right - 116, r.top + 10, r.right - 48, r.top + 38},
+             Muted, app.graphics.smallFont.get(), true);
+        text(L"Kept until Snipper exits", {r.left + 16, r.bottom - 28, r.right - 150, r.bottom - 6},
+             Muted, app.graphics.smallFont.get());
+        for (size_t slot = 0; slot < app.buttons.size(); ++slot)
+        {
+            const auto &button = app.buttons[slot];
+            if (!recentPanelCommand(button.command)) continue;
+            const auto cell = button.rect;
+            const bool over = app.hover == button.command, available = enabled(button.command);
+            const bool down = app.pressed == static_cast<int>(slot + 1) && over;
+            if (!recentChoice(button.command))
+            {
+                rounded(cell, down ? rgb(219, 211, 248) : over && available ? rgb(242, 238, 255) : rgb(249, 249, 252), 7);
+                text(button.label, cell, available ? Ink : Muted, app.graphics.smallFont.get(), true);
+                continue;
+            }
+            const int index = button.command - RecentChoiceFirst;
+            auto &snip = app.recent[index];
+            const bool current = index == app.activeRecent;
+            const bool focus = index == static_cast<int>(app.recent.size()) - 1 - app.recentFocus;
+            panel(cell, down || current ? rgb(242, 238, 255) : rgb(255, 255, 255),
+                  current || over || focus ? Accent : rgb(226, 227, 237));
+            const Rect art{cell.left + 6, cell.top + 6, cell.right - 6, cell.top + 78};
+            rounded(art, rgb(247, 248, 252), 5);
+            if (!snip.thumbnail.empty())
+            {
+                Com<ID2D1Bitmap> offscreen;
+                auto &display = alternate ? offscreen : snip.displayThumbnail;
+                if (!display)
+                {
+                    auto pixels = snip.thumbnail.pixels;
+                    for (size_t i = 0; i < pixels.size(); i += 4)
+                        for (int c = 0; c < 3; ++c)
+                            pixels[i + c] = static_cast<uint8_t>((pixels[i + c] * pixels[i + 3] + 127) / 255);
+                    check(rt->CreateBitmap(D2D1::SizeU(snip.thumbnail.width, snip.thumbnail.height), pixels.data(),
+                        snip.thumbnail.width * 4, D2D1::BitmapProperties(
+                            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96),
+                        display.put()), "Cannot display a recent snip thumbnail.");
+                }
+                const float scale = std::min(art.width() / snip.thumbnail.width, art.height() / snip.thumbnail.height);
+                const float width = snip.thumbnail.width * scale, height = snip.thumbnail.height * scale;
+                const float left = art.left + (art.width() - width) / 2, top = art.top + (art.height() - height) / 2;
+                rt->DrawBitmap(display.get(), {left, top, left + width, top + height}, 1, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            }
+            text(L"Snip " + std::to_wstring(snip.sequence),
+                {cell.left + 8, cell.top + 80, cell.right - 60, cell.bottom}, current ? Accent : Ink,
+                app.graphics.smallFont.get());
+            wchar_t time[16]{};
+            swprintf_s(time, L"%02u:%02u", snip.captured.wHour, snip.captured.wMinute);
+            text(current ? L"Current" : time, {cell.right - 60, cell.top + 80, cell.right - 6, cell.bottom},
+                 current ? Accent : Muted, app.graphics.smallFont.get(), true);
+        }
+    }
     phase(app.paintTiming.content);
     HRESULT result;
     {
@@ -2891,6 +3168,34 @@ void mouseDown(LPARAM lp, bool middle = false)
 {
     SetFocus(app.window);
     Point screen{GET_X_LPARAM(lp) / app.dpi, GET_Y_LPARAM(lp) / app.dpi};
+    if (app.recentOpen)
+    {
+        if (recentPanelRect().contains(screen))
+        {
+            if (!middle)
+                for (size_t i = 0; i < app.buttons.size(); ++i)
+                {
+                    const auto &button = app.buttons[i];
+                    if (recentPanelCommand(button.command) && button.rect.contains(screen) && enabled(button.command))
+                    {
+                        app.pressed = static_cast<int>(i + 1);
+                        app.hover = button.command;
+                        SetCapture(app.window);
+                        repaint();
+                        break;
+                    }
+                }
+            return; // Panel padding never draws on the screenshot beneath it.
+        }
+        const bool toggle = !middle && std::any_of(app.buttons.begin(), app.buttons.end(),
+            [&](const Button &button) { return button.command == RecentSnips && button.rect.contains(screen); });
+        if (!toggle)
+        {
+            closeRecent();
+            buildButtons();
+            return; // Clicking away dismisses the popup without starting an annotation.
+        }
+    }
     if (!middle)
     {
         for (size_t i = 0; i < app.buttons.size(); ++i)
@@ -3039,6 +3344,8 @@ void mouseMove(LPARAM lp)
         for (const auto &button : app.buttons)
             if (button.rect.contains(screen))
             {
+                if (app.recentOpen && recentPanelRect().contains(screen) && !recentPanelCommand(button.command))
+                    continue;
                 hover = button.command;
                 break;
             }
@@ -3548,6 +3855,7 @@ void showShapeChoices(int id)
 }
 void command(int id)
 {
+    if (id != RecentSnips && !recentPanelCommand(id)) closeRecent();
     if (app.sizeRepeatCommand && id != app.sizeRepeatCommand)
     {
         stopSizeRepeat();
@@ -3569,6 +3877,42 @@ void command(int id)
         app.pickerImage = {};
         syncTextEditor();
         repaint();
+    }
+    if (recentChoice(id))
+    {
+        if (enabled(id)) restoreRecentSnip(id - RecentChoiceFirst);
+        return;
+    }
+    if (id == RecentSnips)
+    {
+        if (!enabled(id)) return;
+        if (app.recentOpen) closeRecent();
+        else
+        {
+            app.cropping = false;
+            app.spaceDown = false;
+            refreshRecentThumbnail();
+            app.recentFocus = app.activeRecent >= 0
+                ? static_cast<int>(app.recent.size()) - 1 - app.activeRecent : 0;
+            app.recentScroll = std::max(0, app.recentFocus / 2 - recentVisibleRows() + 1);
+            app.recentOpen = true;
+        }
+        buildButtons();
+        repaint();
+        return;
+    }
+    if (id == RecentClose || id == RecentNewer || id == RecentOlder)
+    {
+        if (!enabled(id)) return;
+        if (id == RecentClose) closeRecent();
+        else
+        {
+            app.recentScroll += id == RecentOlder ? 1 : -1;
+            app.recentFocus = app.recentScroll * 2;
+        }
+        buildButtons();
+        repaint();
+        return;
     }
     if (id >= LogoStyleFirst && id < LogoStyleFirst + 6)
     {
@@ -3740,15 +4084,11 @@ void command(int id)
             repaint();
         }
         break;
-    case RotateCurvedArrow:
     case FlipCurvedArrow:
-    case ReverseCurvedArrow:
         if (enabled(id))
         {
             app.document.begin();
-            app.document.items[app.document.selected].editCurvedArrow(
-                id == RotateCurvedArrow ? CurvedArrowEdit::Rotate :
-                id == FlipCurvedArrow ? CurvedArrowEdit::Flip : CurvedArrowEdit::Reverse);
+            app.document.items[app.document.selected].flipCurvedArrow();
             app.document.commit();
             app.dirty = true;
             updateTitle();
@@ -3946,7 +4286,14 @@ void freezeDesktop(bool includeCursor = false)
 void acceptCapture(Bitmap captured)
 {
     cancelCapture(false);
+    stashRecentSnip();
     releaseImage();
+    if (app.recent.size() == RecentLimit) app.recent.erase(app.recent.begin());
+    RecentSnip entry;
+    GetLocalTime(&entry.captured);
+    entry.sequence = ++app.recentSequence;
+    app.recent.push_back(std::move(entry));
+    app.activeRecent = static_cast<int>(app.recent.size()) - 1;
     app.image = std::move(captured);
     app.tool = Tool::Pen;
     app.erasing = false;
@@ -3959,6 +4306,7 @@ void startSnip(bool instant, bool allMonitors)
 {
     if (app.overlay || app.capturePending || app.settingsWindow)
         return;
+    closeRecent();
     // Reserve the request so repeated snips cannot replace an in-progress capture.
     app.capturePending = true;
     instant = instant || allMonitors;
@@ -4150,6 +4498,7 @@ HMENU createMenu()
     AppendMenuW(view, MF_STRING, Fit, L"&Fit image");
     AppendMenuW(view, MF_STRING, Actual, L"&Actual size (100%)");
     AppendMenuW(view, MF_STRING, FullScreen, L"&Full screen\tF11");
+    AppendMenuW(view, MF_STRING, RecentSnips, L"&Recent snips\tCtrl+Shift+R");
     AppendMenuW(view, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(view, MF_STRING, ToggleActions, L"&Actions row");
     AppendMenuW(view, MF_STRING, ToggleTools, L"&Tools and shapes row");
@@ -4221,11 +4570,44 @@ void updateMenus()
     enable(Undo, app.document.canUndo());
     enable(Redo, app.document.canRedo());
     enable(DeleteSelected, selected());
+    enable(RecentSnips, enabled(RecentSnips));
     enable(Clear, !app.document.items.empty());
     CheckMenuItem(menu, Startup, MF_BYCOMMAND | (startupEnabled() ? MF_CHECKED : MF_UNCHECKED));
 }
 void processKey(WPARAM key)
 {
+    if (app.recentOpen)
+    {
+        if (key == VK_ESCAPE)
+        {
+            closeRecent();
+            buildButtons();
+            return;
+        }
+        if (key == VK_RETURN || key == VK_SPACE)
+        {
+            restoreRecentSnip(static_cast<int>(app.recent.size()) - 1 - app.recentFocus);
+            return;
+        }
+        int next = app.recentFocus;
+        if (key == VK_LEFT) --next;
+        else if (key == VK_RIGHT) ++next;
+        else if (key == VK_UP) next -= 2;
+        else if (key == VK_DOWN) next += 2;
+        else if (key == VK_HOME) next = 0;
+        else if (key == VK_END) next = static_cast<int>(app.recent.size()) - 1;
+        else if (key == VK_PRIOR) next -= recentVisibleRows() * 2;
+        else if (key == VK_NEXT) next += recentVisibleRows() * 2;
+        else if (!(GetKeyState(VK_CONTROL) & 0x8000)) return;
+        app.recentFocus = std::clamp(next, 0, static_cast<int>(app.recent.size()) - 1);
+        if (app.recentFocus / 2 < app.recentScroll) app.recentScroll = app.recentFocus / 2;
+        if (app.recentFocus / 2 >= app.recentScroll + recentVisibleRows())
+            app.recentScroll = app.recentFocus / 2 - recentVisibleRows() + 1;
+        buildButtons();
+        repaint();
+        if (key >= VK_PRIOR && key <= VK_DOWN) return;
+        if (key == VK_HOME || key == VK_END) return;
+    }
     if (key == VK_F11)
     {
         command(FullScreen);
@@ -4285,6 +4667,9 @@ void processKey(WPARAM key)
         {
         case 'N':
             command(NewSnip);
+            break;
+        case 'R':
+            if (shift) command(RecentSnips);
             break;
         case 'C':
             command(Copy);
@@ -4507,6 +4892,11 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         return 0;
     case WM_LBUTTONDBLCLK:
     {
+        if (app.recentOpen)
+        {
+            mouseDown(lp);
+            return 0;
+        }
         Point screen{GET_X_LPARAM(lp) / app.dpi, GET_Y_LPARAM(lp) / app.dpi};
         const bool onButton = std::any_of(app.buttons.begin(), app.buttons.end(),
             [&](const Button &button) { return button.rect.contains(screen); });
@@ -4551,6 +4941,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_ACTIVATE:
         if (LOWORD(wp) != WA_INACTIVE)
             break;
+        closeRecent();
         [[fallthrough]];
     case WM_CANCELMODE:
         stopSizeRepeat();
@@ -4563,11 +4954,19 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_MOUSEWHEEL: {
-        if (!hasImage())
-            return 0;
         POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd, &p);
         const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        if (app.recentOpen)
+        {
+            if (recentPanelRect().contains({p.x / app.dpi, p.y / app.dpi}))
+            {
+                if (delta) command(delta < 0 ? RecentOlder : RecentNewer);
+            }
+            else closeRecent();
+            return 0;
+        }
+        if (!hasImage()) return 0;
         if (delta && canvasRect().contains({p.x / app.dpi, p.y / app.dpi}))
             zoomAt({p.x / app.dpi, p.y / app.dpi}, std::pow(1.2f, delta / 120.0f));
         return 0;
@@ -4658,10 +5057,11 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_CLOSE:
         if (app.settingsWindow)
             closeSettings();
-        finishTextEditing(true);
+        finishTextEditing();
         saveToolPreferencesOrNotify();
         if (app.tray)
         {
+            stashRecentSnip();
             releaseImage();
             ShowWindow(hwnd, SW_HIDE);
         }
@@ -4678,6 +5078,9 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
             saveToolPreferences();
         return 0;
     case WM_DESTROY:
+        app.recent.clear();
+        app.activeRecent = -1;
+        app.recentOpen = false;
         stopSizeRepeat();
         finishTextEditing(true);
         for (auto &cursor : app.grabCursor)
@@ -5643,10 +6046,12 @@ void testCurvedArrowControls()
             updateView();
             const auto before = app.document.items;
             const auto exportedBefore = renderedExport();
-            for (int id : {RotateCurvedArrow, FlipCurvedArrow, ReverseCurvedArrow})
             {
                 app.document.selected = 0;
-                const Rect r = button(id);
+                const Rect r = button(FlipCurvedArrow);
+                if (std::count_if(app.buttons.begin(), app.buttons.end(),
+                    [](const Button &b) { return curvedArrowCommand(b.command); }) != 1)
+                    throw std::runtime_error("Curved arrow must show a single Flip control.");
                 if (!canvas.contains({r.left, r.top}) || !canvas.contains({r.right, r.bottom}))
                     throw std::runtime_error("Curved arrow controls escaped the canvas.");
                 const auto click = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * dpi),
@@ -5656,6 +6061,7 @@ void testCurvedArrowControls()
                 UpdateWindow(app.window);
                 SendMessageW(app.window, WM_LBUTTONUP, 0, click);
                 if (app.document.items[0] == curved || app.document.items[1] != other ||
+                    app.document.items[0].a != curved.a || app.document.items[0].b != curved.b ||
                     app.document.selected != 0 || app.drag != Drag::None || app.pressed ||
                     GetCapture() == app.window || app.document.editing())
                     throw std::runtime_error("Curved arrow click changed the wrong object or left an edit pending.");
@@ -5682,7 +6088,7 @@ void testCurvedArrowControls()
             app.document.items[0].move({-200, -160});
             app.fit = true;
             updateView();
-            for (int id : {RotateCurvedArrow, FlipCurvedArrow, ReverseCurvedArrow}) button(id);
+            button(FlipCurvedArrow);
             for (int selection : {-1, 1})
             {
                 app.document.selected = selection;
@@ -5701,7 +6107,7 @@ void testCurvedArrowControls()
     app.document.items = {curved, other};
     app.document.selected = 0;
     updateView();
-    const auto r = button(RotateCurvedArrow);
+    const auto r = button(FlipCurvedArrow);
     Annotation underControl;
     underControl.kind = Tool::Text;
     underControl.text = L"Text beneath selection controls";
@@ -5724,6 +6130,252 @@ void testCurvedArrowControls()
     SetWindowPos(app.window, nullptr, originalBounds.left, originalBounds.top,
         originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
         SWP_NOZORDER | SWP_NOACTIVATE);
+    buildButtons();
+}
+void testRecentSnips()
+{
+    const auto options = app.exportOptions;
+    const auto dpi = app.dpi;
+    const auto collapsed = app.collapsedRows;
+    RECT bounds{};
+    GetWindowRect(app.window, &bounds);
+    releaseImage();
+    app.recent.clear();
+    app.recentSequence = 0;
+    app.exportOptions = {};
+    app.collapsedRows = 0;
+    auto require = [](bool ok, const char *message) { if (!ok) throw std::runtime_error(message); };
+    auto capture = [&](int number, int width = 640, int height = 360) {
+        auto image = Bitmap::create(width, height);
+        for (int y = 0; y < height; ++y)
+            for (int x = 0; x < width; ++x)
+            {
+                const size_t p = (static_cast<size_t>(y) * width + x) * 4;
+                image.pixels[p] = static_cast<uint8_t>(220 + number % 25);
+                image.pixels[p + 1] = static_cast<uint8_t>(230 - number % 20);
+                image.pixels[p + 2] = static_cast<uint8_t>(245 - number % 30);
+                image.pixels[p + 3] = 255;
+            }
+        Annotation label;
+        label.kind = Tool::Text;
+        label.a = {24, 20};
+        label.text = L"Screenshot " + std::to_wstring(number);
+        label.fontSize = 30;
+        label.color = Ink;
+        app.graphics.measureText(label);
+        return app.graphics.flatten(image, {label});
+    };
+    auto click = [&](int id, bool cancel = false) {
+        buildButtons();
+        const auto found = std::find_if(app.buttons.begin(), app.buttons.end(),
+            [&](const Button &b) { return b.command == id; });
+        require(found != app.buttons.end() && enabled(id), "Recent snip mouse control is unavailable.");
+        const auto r = found->rect;
+        const auto point = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * app.dpi),
+            static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
+        SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point);
+        UpdateWindow(app.window);
+        SendMessageW(app.window, WM_LBUTTONUP, 0, cancel ? MAKELPARAM(2, 2) : point);
+        require(!app.pressed && GetCapture() != app.window && app.drag == Drag::None,
+                "Recent snip button left a pointer gesture pending.");
+    };
+    require(!enabled(RecentSnips), "A fresh session has recent captures.");
+    auto first = capture(1);
+    const auto original = first.pixels;
+    acceptCapture(std::move(first));
+    require(app.recent.size() == 1 && app.activeRecent == 0 && app.recent[0].image.empty(),
+            "The active capture was duplicated in session storage.");
+    beginTextEditing({50, 70});
+    SendMessageW(app.textEdit, WM_CHAR, 'X', 0);
+    click(RecentSnips);
+    require(!app.textEdit && app.document.items.size() == 1 && app.document.items[0].text == L"X" &&
+            !app.recent[0].thumbnail.empty(), "Opening Recent did not commit text and refresh its thumbnail.");
+    click(RecentClose);
+    applyCrop({40, 40, 600, 300});
+    app.fit = false;
+    app.view.scale = 2 / app.dpi;
+    updateView();
+    app.savePath = L"recent-first.png";
+    const auto firstItems = app.document.items;
+    const auto firstPixels = renderedExport().pixels;
+    const auto firstView = app.view;
+    acceptCapture(capture(2));
+    Annotation arrow;
+    arrow.kind = Tool::Arrow;
+    arrow.style = 2;
+    arrow.a = {120, 140};
+    arrow.b = {480, 220};
+    app.document.begin();
+    app.document.items.push_back(arrow);
+    app.document.commit();
+    app.dirty = true;
+    app.savePath = L"recent-second.png";
+    saveImage();
+    const auto secondPixels = renderedExport().pixels;
+    click(RecentSnips);
+    click(RecentChoiceFirst);
+    require(app.activeRecent == 0 && app.document.items == firstItems && app.image.width == 560 &&
+            app.savePath == L"recent-first.png" && app.dirty && app.view.scale == firstView.scale &&
+            app.view.origin == firstView.origin && renderedExport().pixels == firstPixels,
+            "Switching captures lost text, crop, save path, dirty state, zoom, or export pixels.");
+    command(Undo);
+    require(app.image.pixels == original && app.document.items[0].a == Point{50, 70} && app.document.canRedo(),
+            "A restored capture lost its crop source or undo history.");
+    click(RecentSnips);
+    click(RecentChoiceFirst + 1);
+    require(app.savePath == L"recent-second.png" && !app.dirty && renderedExport().pixels == secondPixels,
+            "A saved capture changed when reopened.");
+    restoreRecentSnip(0);
+    require(app.document.canRedo(), "Switching snips discarded redo history.");
+    command(Redo);
+    require(renderedExport().pixels == firstPixels, "Restored crop redo changed export pixels.");
+    command(Undo);
+    command(Undo);
+    require(app.document.items.empty(), "Annotation history leaked across captures.");
+    command(Redo);
+    command(Redo);
+    require(renderedExport().pixels == firstPixels, "Restored annotation/crop history did not round trip.");
+    const auto count = app.recent.size();
+    startSnip(true);
+    cancelCapture();
+    require(app.recent.size() == count && app.activeRecent == 0 && renderedExport().pixels == firstPixels,
+            "Canceling a capture changed the session collection or active snip.");
+    const auto savedCount = app.recent.size();
+    SendMessageW(app.window, WM_CLOSE, 0, 0);
+    require(!hasImage() && app.recent.size() == savedCount && !app.recent[0].image.empty(),
+            "Closing to the tray lost recent captures.");
+    showEditor();
+    click(RecentSnips);
+    click(RecentChoiceFirst);
+    require(renderedExport().pixels == firstPixels, "Reopening from the tray lost edited pixels.");
+    for (int n = 3; n <= 11; ++n) acceptCapture(capture(n));
+    require(app.recent.size() == 10 && app.recent.front().sequence == 2 && app.recent.back().sequence == 11,
+            "The 11th capture did not evict exactly the oldest snip.");
+    restoreRecentSnip(0);
+    require(renderedExport().pixels == secondPixels && app.recent.front().sequence == 2,
+            "Revisiting the oldest snip changed its edits or capture order.");
+    acceptCapture(capture(12));
+    require(app.recent.size() == 10 && app.recent.front().sequence == 3 && app.recent.back().sequence == 12,
+            "Capturing while viewing the oldest snip evicted the wrong entry.");
+    for (float scale : {1.0f, 1.5f, 2.0f})
+        for (int width : {1000, 850})
+        {
+            app.dpi = scale;
+            SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(width * scale),
+                static_cast<int>((width == 850 ? 430 : 700) * scale), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            command(RecentSnips);
+            require(app.recentOpen, "Recent button did not reopen.");
+            const auto panel = recentPanelRect(), client = clientDips();
+            require(panel.left >= 0 && panel.top >= 0 && panel.right <= client.right &&
+                    panel.bottom <= client.bottom - StatusHeight, "Recent popup escaped a small/DPI-scaled window.");
+            const auto scaleBefore = app.view.scale;
+            POINT wheelPoint{static_cast<LONG>((panel.left + 30) * scale), static_cast<LONG>((panel.top + 60) * scale)};
+            ClientToScreen(app.window, &wheelPoint);
+            SendMessageW(app.window, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)),
+                MAKELPARAM(wheelPoint.x, wheelPoint.y));
+            require(app.view.scale == scaleBefore, "Scrolling Recent zoomed the screenshot beneath it.");
+            saveBytes(L"recent-panel-" + std::to_wstring(width) + L"-" + std::to_wstring(static_cast<int>(scale * 100)) + L".png",
+                      app.graphics.png(renderEditorPreview()));
+            processKey(VK_END);
+            require(app.recentFocus == 9 && app.recentScroll + recentVisibleRows() >= 5,
+                    "Keyboard navigation could not reach the oldest thumbnail.");
+            processKey(VK_RETURN);
+            require(app.activeRecent == 0 && !app.recentOpen, "Keyboard selection opened the wrong snip.");
+            command(RecentSnips);
+            processKey(VK_ESCAPE);
+            require(!app.recentOpen && app.activeRecent == 0, "Esc changed the active capture.");
+            command(RecentSnips);
+            const auto before = app.document.items;
+            const auto outside = MAKELPARAM(30, static_cast<int>((canvasRect().top + 20) * scale));
+            SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, outside);
+            SendMessageW(app.window, WM_LBUTTONUP, 0, outside);
+            require(!app.recentOpen && app.document.items == before && !app.document.editing(),
+                    "Dismissing Recent drew on the screenshot.");
+            command(RecentSnips);
+            click(RecentClose);
+            click(RecentSnips, true);
+            require(!app.recentOpen, "A canceled Recent button press opened the panel.");
+            for (unsigned mask = 0; mask < 8; ++mask)
+            {
+                app.collapsedRows = mask;
+                command(RecentSnips);
+                const auto popup = recentPanelRect();
+                require(popup.bottom <= clientDips().bottom - StatusHeight,
+                    "Collapsed rows pushed Recent out of a compact window.");
+                processKey(VK_ESCAPE);
+            }
+            app.collapsedRows = 0;
+        }
+    app.dpi = dpi;
+    app.collapsedRows = collapsed;
+    SetWindowPos(app.window, nullptr, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+        SWP_NOZORDER | SWP_NOACTIVATE);
+    BYTE keyboard[256]{}, restoreKeyboard[256]{};
+    GetKeyboardState(restoreKeyboard);
+    std::copy(std::begin(restoreKeyboard), std::end(restoreKeyboard), std::begin(keyboard));
+    keyboard[VK_CONTROL] = keyboard[VK_SHIFT] = 0x80;
+    SetKeyboardState(keyboard);
+    processKey('R');
+    SetKeyboardState(restoreKeyboard);
+    require(app.recentOpen, "Ctrl+Shift+R did not open Recent.");
+    SendMessageW(app.window, WM_ACTIVATE, WA_INACTIVE, 0);
+    require(!app.recentOpen, "Recent stayed open when the editor lost activation.");
+    for (int row = 0; row < 3; ++row)
+    {
+        command(ToggleActions + row);
+        command(RecentSnips);
+        require(app.recentOpen, "Recent menu command failed with collapsed toolbars.");
+        processKey(VK_ESCAPE);
+    }
+    command(FullScreen);
+    click(RecentSnips);
+    saveBytes(L"recent-full-screen.png", app.graphics.png(renderEditorPreview()));
+    processKey(VK_ESCAPE);
+    command(FullScreen);
+    const auto started = std::chrono::steady_clock::now();
+    for (int i = 0; i < 20; ++i)
+    {
+        restoreRecentSnip(i % 10);
+        UpdateWindow(app.window);
+    }
+    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    std::string timings = "Mean switch and paint (640x360, software): " + std::to_string(elapsed / 20) + " ms\n";
+    for (const auto &snip : app.recent)
+        require(snip.thumbnail.width <= 400 && snip.thumbnail.height <= 224,
+                "Recent thumbnails retained full-size render buffers.");
+    std::ifstream saved(std::filesystem::path(L"recent-second.png"), std::ios::binary);
+    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(saved), std::istreambuf_iterator<char>()};
+    require(app.graphics.decode(bytes).pixels == secondPixels, "Saved PNG differed from the restored snip export.");
+    releaseImage();
+    app.recent.clear();
+    for (int n = 0; n < 3; ++n) acceptCapture(capture(20 + n, 3840, 2160));
+    std::vector<double> switches;
+    for (int n = 0; n < 9; ++n)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        restoreRecentSnip(n % 3);
+        UpdateWindow(app.window);
+        switches.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+    std::sort(switches.begin(), switches.end());
+    timings += "4K switch and paint (software), median: " + std::to_string(switches[4]) +
+               " ms; worst: " + std::to_string(switches.back()) + " ms\n";
+    command(RecentSnips);
+    UpdateWindow(app.window);
+    const auto popupStart = std::chrono::steady_clock::now();
+    for (int n = 0; n < 10; ++n)
+    {
+        repaint();
+        UpdateWindow(app.window);
+    }
+    timings += "Mean cached popup repaint (software): " + std::to_string(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - popupStart).count() / 10) + " ms\n";
+    writeTestReport(L"recent-timings.txt", timings);
+    releaseImage();
+    app.recent.clear();
+    app.recentSequence = 0;
+    app.exportOptions = options;
+    app.collapsedRows = collapsed;
     buildButtons();
 }
 void testCropTool()
@@ -6398,7 +7050,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool selfTest = false, trayOnly = false, snipNow = false, verifyPreferences = false, shortcutTest = false,
          navigationTest = false, paletteTest = false, verifyPalette = false, eraserTest = false,
-         penSizeTest = false, verifyPenSize = false, arrowEditTest = false;
+         penSizeTest = false, verifyPenSize = false, arrowEditTest = false, recentTest = false;
     for (int i = 1; i < argc; ++i)
     {
         if (wcscmp(argv[i], L"--self-test") == 0)
@@ -6419,6 +7071,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             app.smoke = eraserTest = true;
         else if (wcscmp(argv[i], L"--arrow-edit-test") == 0)
             app.smoke = arrowEditTest = true;
+        else if (wcscmp(argv[i], L"--recent-test") == 0)
+            app.smoke = recentTest = true;
         else if (wcscmp(argv[i], L"--pen-size-test") == 0)
             penSizeTest = true;
         else if (wcscmp(argv[i], L"--verify-pen-size-preferences") == 0)
@@ -6662,11 +7316,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     "no-op redo preservation, cached cursor/hits at 100/150/200% DPI and 50/100/800% zoom, toolbar layout.\n");
                 command(Exit);
             }
+            else if (recentTest)
+            {
+                testRecentSnips();
+                acceptCapture(Bitmap::create(10, 10));
+                command(Exit);
+                if (!app.recent.empty()) throw std::runtime_error("Exiting did not clear the recent capture collection.");
+                writeTestReport(L"recent-test-results.txt",
+                    "PASS: last 10 session captures including current, oldest eviction and stable order, active-buffer ownership, "
+                    "text/crop/undo/redo/zoom/save-path restoration, PNG export, canceled capture, close-to-tray retention, "
+                    "mouse and keyboard selection/dismissal, compact scroll, popup layout at 100/150/200% DPI, "
+                    "collapsed rows and full screen, cached thumbnails, switch/paint timing, empty fresh session and Exit cleanup.\n");
+            }
             else if (arrowEditTest)
             {
                 testCurvedArrowControls();
                 writeTestReport(L"arrow-edit-test-results.txt",
-                    "PASS: curved arrow rotate/flip/reverse mouse controls at 100/150/200% DPI and 50/100/800% zoom; "
+                    "PASS: curved arrow Flip mouse control at 100/150/200% DPI and 50/100/800% zoom; "
                     "selected object only, edge positioning, unchanged tool preferences, one-step undo/redo, "
                     "hit testing, preview/export agreement and PNG round trips.\n");
                 command(Exit);
@@ -6692,6 +7358,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 testPaletteTools();
                 testEraserTool();
                 testCurvedArrowControls();
+                testRecentSnips();
                 testCropTool();
                 testCaptureShortcuts();
                 auto clickButton = [&](int id, bool cancel = false) {
@@ -8002,7 +8669,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 writeTestReport(
                     L"smoke-test-results.txt",
                     "PASS: unsaved new snips, closing, and File > Exit proceed without save confirmation, "
-                    "closing discards active text editing, repeated capture shortcuts ignored, "
+                    "closing retains committed edits in session history, repeated capture shortcuts ignored, "
                     "no editor/fade pixels in capture, restored editor with Pen selected, "
                     "instant hotkey freezes focus-dismissed hover popup pixels before selection, "
                     "instant all-monitor capture preserves hover menus and pointer with visible/hidden and edited/unedited snips, "
@@ -8052,7 +8719,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     {
         result = 1;
         if (selfTest || app.smoke || verifyPreferences || verifyPalette || penSizeTest || verifyPenSize || app.resizeTest)
-            writeTestReport(arrowEditTest ? L"arrow-edit-test-results.txt" : penSizeTest ? L"pen-size-test-results.txt" : verifyPenSize ? L"pen-size-preference-results.txt" : eraserTest ? L"eraser-test-results.txt" : verifyPalette ? L"palette-preference-results.txt" : paletteTest ? L"palette-test-results.txt" : navigationTest ? L"navigation-test-results.txt" : shortcutTest ? L"shortcut-test-results.txt" : app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
+            writeTestReport(recentTest ? L"recent-test-results.txt" : arrowEditTest ? L"arrow-edit-test-results.txt" : penSizeTest ? L"pen-size-test-results.txt" : verifyPenSize ? L"pen-size-preference-results.txt" : eraserTest ? L"eraser-test-results.txt" : verifyPalette ? L"palette-preference-results.txt" : paletteTest ? L"palette-test-results.txt" : navigationTest ? L"navigation-test-results.txt" : shortcutTest ? L"shortcut-test-results.txt" : app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
                             selfTest ? L"self-test-results.txt" : L"smoke-test-results.txt",
                             std::string("FAIL: ") + exception.what() + "\n");
         else

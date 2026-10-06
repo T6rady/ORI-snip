@@ -45,27 +45,11 @@ float segmentDistance(Point p, Point a, Point b)
     float t = n > 0 ? std::clamp((w.x * v.x + w.y * v.y) / n, 0.0f, 1.0f) : 0;
     return length(p - (a + v * t));
 }
-bool Annotation::editCurvedArrow(CurvedArrowEdit edit)
+bool Annotation::flipCurvedArrow()
 {
     if (kind != Tool::Arrow || style != 2 || length(b - a) < .01f)
         return false;
-    if (edit == CurvedArrowEdit::Rotate)
-    {
-        const Point center = (a + b) * .5f;
-        auto rotate = [&](Point p) {
-            const Point d = p - center;
-            return center + Point{-d.y, d.x};
-        };
-        a = rotate(a);
-        b = rotate(b);
-    }
-    else
-    {
-        // Reversing the endpoints also reverses their normal; keep the arc in place.
-        if (edit == CurvedArrowEdit::Reverse)
-            std::swap(a, b);
-        curveFlipped = !curveFlipped;
-    }
+    curveFlipped = !curveFlipped;
     return true;
 }
 Point Annotation::arrowSpine(float t) const
@@ -457,8 +441,7 @@ void runModelTests()
         curved.a = {100, 100};
         curved.b = curved.a + direction;
         const auto original = curved;
-        const Point center = (curved.a + curved.b) * .5f;
-        require(curved.editCurvedArrow(CurvedArrowEdit::Flip));
+        require(curved.flipCurvedArrow());
         require(curved.a == original.a && curved.b == original.b);
         for (float t : {.2f, .5f, .8f})
         {
@@ -466,32 +449,22 @@ void runModelTests()
                            (original.a + direction * t) * 2) < .001f);
             require(curved.hit(curved.arrowSpine(t), 0));
         }
-        require(curved.editCurvedArrow(CurvedArrowEdit::Flip) && curved == original);
-        require(curved.editCurvedArrow(CurvedArrowEdit::Reverse));
-        require(curved.a == original.b && curved.b == original.a);
-        for (float t : {.2f, .5f, .8f})
-            require(length(curved.arrowSpine(t) - original.arrowSpine(1 - t)) < .001f);
-        require(curved.editCurvedArrow(CurvedArrowEdit::Reverse) && curved == original);
-        require(curved.editCurvedArrow(CurvedArrowEdit::Rotate));
-        require(length((curved.a + curved.b) * .5f - center) < .001f);
-        require(length(curved.b - curved.a - Point{-direction.y, direction.x}) < .001f);
-        for (int i = 0; i < 3; ++i) require(curved.editCurvedArrow(CurvedArrowEdit::Rotate));
-        require(curved == original);
+        require(curved.flipCurvedArrow() && curved == original);
     }
     for (int style : {0, 1, 3, 4})
     {
         Annotation straight = arrow;
         straight.style = static_cast<uint8_t>(style);
         const auto unchanged = straight;
-        require(!straight.editCurvedArrow(CurvedArrowEdit::Rotate) && straight == unchanged);
+        require(!straight.flipCurvedArrow() && straight == unchanged);
     }
     Annotation other = arrow;
     other.kind = Tool::Line;
     other.style = 2;
-    require(!other.editCurvedArrow(CurvedArrowEdit::Flip));
+    require(!other.flipCurvedArrow());
     other.kind = Tool::Arrow;
     other.b = other.a;
-    require(!other.editCurvedArrow(CurvedArrowEdit::Reverse));
+    require(!other.flipCurvedArrow());
     Annotation pen;
     pen.points = {{0, 0}, {10, 20}};
     pen.resize(pen.bounds(), {10, 10, 30, 50});

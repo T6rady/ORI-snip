@@ -1,10 +1,18 @@
 #include "graphics.h"
 #include "color_picker.h"
+#include "settings.h"
+#include "commands.h"
+#include "test_hooks.h"
+#include "capture.h"
+#include "clipboard.h"
+#include "file_io.h"
+#include "test_reports.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <shlobj.h>
 #include <dwmapi.h>
 #include <fstream>
 #include <filesystem>
@@ -19,8 +27,9 @@
 using namespace snip;
 namespace
 {
-constexpr wchar_t MainClass[] = L"JackSnip.Main.1", OverlayClass[] = L"JackSnip.Capture.1",
-                  SettingsClass[] = L"JackSnip.Settings.1", DiagnosticClass[] = L"JackSnip.ResizeDiagnostic.1";
+constexpr wchar_t MainClass[] = L"TigerSnip.Main.1", OverlayClass[] = L"TigerSnip.Capture.1",
+                  SettingsClass[] = L"TigerSnip.Settings.1",
+                  DiagnosticClass[] = L"TigerSnip.ResizeDiagnostic.1";
 constexpr UINT TrayMessage = WM_APP + 20, LaunchMessage = WM_APP + 21;
 constexpr UINT CaptureTimer = 1, StatusTimer = 2, SmokeTimer = 3, CopyFlashTimer = 4,
                SizeRepeatTimer = 5, TraceHeartbeatTimer = 6;
@@ -78,7 +87,7 @@ enum Command
     RecentNewer,
     RecentOlder,
     AutoCopy,
-    ColorFirst = 2000,
+    ColorFirst = PaletteFirst,
     ShowEditor = 1200,
     CircleStyleMenu = 1300,
     ArrowStyleMenu,
@@ -88,17 +97,18 @@ enum Command
     TextSizeFirst = 1500,
     TextEditControl = 1600,
     LogoStyleFirst = 1800,
-    RecentChoiceFirst = 2200
+    RecentChoiceFirst = RecentFirst
 };
-constexpr const wchar_t *LogoStyleNames[] = {L"S - White badge", L"S - Soft watermark",
-    L"Tiger - White badge", L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
+constexpr const wchar_t *LogoStyleNames[] = {
+    L"S - White badge",        L"S - Soft watermark",     L"Tiger - White badge",
+    L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
 const std::array<Color, 8> Palette = {rgb(239, 68, 68),   rgb(249, 115, 22), rgb(250, 204, 21),
                                       rgb(34, 197, 94),   rgb(14, 165, 233), rgb(168, 85, 247),
                                       rgb(255, 255, 255), rgb(15, 23, 42)};
 constexpr std::array<uint8_t, 9> StyleCounts = {1, 1, 3, 5, 6, 3, 4, 1, 1};
 constexpr int StyleChoiceStride = 8;
-constexpr const wchar_t *ToolNames[] = {L"Select", L"Pen", L"Circle", L"Arrow", L"Check", L"Line",
-                                       L"Rectangle", L"Text", L"Highlight"};
+constexpr const wchar_t *ToolNames[] = {L"Select", L"Pen",       L"Circle", L"Arrow",    L"Check",
+                                        L"Line",   L"Rectangle", L"Text",   L"Highlight"};
 constexpr std::array<int, 10> FontSizes = {12, 16, 20, 24, 32, 40, 48, 64, 96, 144};
 constexpr std::array<const wchar_t *, 10> WelcomeMessages = {
     L"The snipping tool of your dreams!",
@@ -110,11 +120,11 @@ constexpr std::array<const wchar_t *, 10> WelcomeMessages = {
     L"Your ideas look good in pixels.",
     L"A clearer picture. A smoother workday.",
     L"Small snips. Happier teammates.",
-    L"One snip closer to \"Got it!\""
-};
+    L"One snip closer to \"Got it!\""};
 constexpr int styleCommand(Tool tool, int style)
 {
-    return StyleChoiceFirst + (static_cast<int>(tool) - static_cast<int>(Tool::Circle)) * StyleChoiceStride + style;
+    return StyleChoiceFirst +
+           (static_cast<int>(tool) - static_cast<int>(Tool::Circle)) * StyleChoiceStride + style;
 }
 struct Button
 {
@@ -157,8 +167,8 @@ struct RecentSnip
 constexpr size_t RecentLimit = 10;
 struct Application
 {
-    bool resizeTest = false, resizeTestIdle = false, softwareRendering = false, rendererSpecified = false,
-         diagnosticInstance = false;
+    bool resizeTest = false, resizeTestIdle = false, softwareRendering = false,
+         rendererSpecified = false, diagnosticInstance = false;
     std::ofstream resizeTrace;
     struct PaintTiming
     {
@@ -210,8 +220,8 @@ struct Application
     unsigned recentSequence = 0;
     Tool tool = Tool::Select;
     bool erasing = false;
-    std::array<Color, 9> colors = {Palette[0], Palette[0], Palette[0],
-                                   Palette[0], Palette[3], Palette[0], Palette[0], Ink, Palette[2]};
+    std::array<Color, 9> colors = {Palette[0], Palette[0], Palette[0], Palette[0], Palette[3],
+                                   Palette[0], Palette[0], Ink,        Palette[2]};
     std::array<uint8_t, 9> styles{};
     std::vector<Color> palette{Palette.begin(), Palette.end()};
     bool paletteDirty = false;
@@ -224,7 +234,8 @@ struct Application
     bool fit = true, dirty = false, capturePending = false, exiting = false, tray = false,
          spaceDown = false;
     bool selecting = false, changed = false, smoke = false;
-    bool toolPreferencesDirty = false;
+    bool toolPreferencesDirty = false, shortcutsDirty = false, rendererPreferencesDirty = false;
+    std::string preferenceError;
     bool autoCopy = true;
     bool exportPreferencesDirty = false;
     ULONGLONG copyFlashStarted = 0;
@@ -266,8 +277,8 @@ class ResizeTrace
     static inline std::ostringstream pending;
 
   public:
-    explicit ResizeTrace(const char *operation, UINT windowMessage = 0) :
-        name(operation), message(windowMessage), enabled(app.resizeTrace.is_open())
+    explicit ResizeTrace(const char *operation, UINT windowMessage = 0)
+        : name(operation), message(windowMessage), enabled(app.resizeTrace.is_open())
     {
         if (enabled)
         {
@@ -275,25 +286,33 @@ class ResizeTrace
             start = std::chrono::steady_clock::now();
         }
     }
-    ~ResizeTrace()
+    ~ResizeTrace() noexcept
     {
-        if (!enabled)
-            return;
-        const auto now = std::chrono::steady_clock::now();
-        const double ms = std::chrono::duration<double, std::milli>(now - start).count();
-        if (name || ms >= 100)
-            pending << GetTickCount64() << " " << (name ? name : "WM_OTHER") << " " << ms <<
-                "ms depth=" << depth << " message=" << message << "\n";
-        if (--depth == 0)
+        try
         {
-            // Batch diagnostic I/O after the outer operation has finished painting.
-            const auto entries = pending.str();
-            if (!entries.empty())
+            if (!enabled)
+                return;
+            const auto now = std::chrono::steady_clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(now - start).count();
+            if (name || ms >= 100)
+                pending << GetTickCount64() << " " << (name ? name : "WM_OTHER") << " " << ms
+                        << "ms depth=" << depth << " message=" << message << "\n";
+            if (--depth == 0)
             {
-                app.resizeTrace << entries;
-                app.resizeTrace.flush();
+                // Batch diagnostic I/O after the outer operation has finished painting.
+                const auto entries = pending.str();
+                if (!entries.empty())
+                {
+                    app.resizeTrace << entries;
+                    app.resizeTrace.flush();
+                }
+                pending.str("");
             }
-            pending.str("");
+        }
+        catch (...)
+        {
+            depth = 0;
+            OutputDebugStringW(L"Tiger Snip: resize tracing failed.\n");
         }
     }
 };
@@ -339,17 +358,16 @@ void repaint()
         refreshEditorCursor();
     }
 }
-void error(HWND owner, const char *text)
+void error(HWND owner, const char *text) noexcept
 {
-    int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
-    std::wstring message(static_cast<size_t>(std::max(1, count)), 0);
-    MultiByteToWideChar(CP_UTF8, 0, text, -1, message.data(), count);
-    MessageBoxW(owner, message.c_str(), L"Snipper", MB_OK | MB_ICONERROR);
+    showError(owner, text);
 }
 void status(const std::wstring &text)
 {
     app.status = text;
-    SetTimer(app.window, StatusTimer, 4500, nullptr);
+    // If the optional expiry timer fails, keep the message visible until the next action.
+    if (!SetTimer(app.window, StatusTimer, 4500, nullptr))
+        OutputDebugStringW(L"Tiger Snip: status expiry timer unavailable.\n");
     repaint();
 }
 float dpiFor(HWND hwnd)
@@ -367,7 +385,8 @@ float rowHeight(int row)
     constexpr float heights[] = {60, 63, 43};
     if (app.collapsedRows & (1U << row))
         return 20;
-    const int rows = (static_cast<int>(app.palette.size()) + 2 + paletteColumns() - 1) / paletteColumns();
+    const int rows =
+        (static_cast<int>(app.palette.size()) + 2 + paletteColumns() - 1) / paletteColumns();
     return heights[row] + (row == 2 ? 34.0f * (rows - 1) : 0);
 }
 float rowTop(int row)
@@ -377,7 +396,10 @@ float rowTop(int row)
         top += rowHeight(i);
     return top;
 }
-float toolbarHeight() { return app.fullScreen ? 0 : rowTop(3); }
+float toolbarHeight()
+{
+    return app.fullScreen ? 0 : rowTop(3);
+}
 Rect workspaceRect()
 {
     auto r = clientDips();
@@ -404,7 +426,8 @@ void resetPreview()
 }
 void resetRecentDisplays()
 {
-    for (auto &snip : app.recent) snip.displayThumbnail.reset();
+    for (auto &snip : app.recent)
+        snip.displayThumbnail.reset();
 }
 const Bitmap &previewImage()
 {
@@ -458,141 +481,119 @@ float brushWidth()
 }
 void loadToolPreferences()
 {
-    app.palette.assign(Palette.begin(), Palette.end());
-    const UINT count = GetPrivateProfileIntW(L"Palette", L"Count", UINT(-1), app.iniPath.c_str());
-    if (count <= 60000U - ColorFirst)
-    {
-        app.palette.clear();
-        for (UINT i = 0; i < count; ++i)
-        {
-            const UINT value = GetPrivateProfileIntW(L"Palette", std::to_wstring(i).c_str(),
-                                                    UINT(-1), app.iniPath.c_str());
-            if (value <= 0xFFFFFF && std::find(app.palette.begin(), app.palette.end(), value) == app.palette.end())
-                app.palette.push_back(value);
-        }
-    }
+    app.palette = loadPalette(app.iniPath, {Palette.begin(), Palette.end()});
     app.paletteDirty = false;
-    app.autoCopy = GetPrivateProfileIntW(L"Settings", L"AutoCopy", 1, app.iniPath.c_str()) != 0;
+    app.autoCopy = preferenceUInt(app.iniPath, L"Settings", L"AutoCopy", 1) != 0;
     if (!app.rendererSpecified)
         app.softwareRendering =
-            GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 0;
-    app.collapsedRows = GetPrivateProfileIntW(L"Settings", L"CollapsedRows", 0, app.iniPath.c_str()) & 7U;
+            preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 0) != 0;
+    app.collapsedRows = preferenceUInt(app.iniPath, L"Settings", L"CollapsedRows", 0) & 7U;
     app.layoutPreferencesDirty = false;
     wchar_t folder[32768]{};
     GetPrivateProfileStringW(L"Settings", L"SaveFolder", L"", folder, 32768, app.iniPath.c_str());
     app.saveFolder = folder;
     app.exportOptions.professionalBorder =
-        GetPrivateProfileIntW(L"Settings", L"ProfessionalBorder", 0, app.iniPath.c_str()) != 0;
+        preferenceUInt(app.iniPath, L"Settings", L"ProfessionalBorder", 0) != 0;
     app.exportOptions.professionalBlur =
-        GetPrivateProfileIntW(L"Settings", L"ProfessionalBlur", 1, app.iniPath.c_str()) != 0;
+        preferenceUInt(app.iniPath, L"Settings", L"ProfessionalBlur", 1) != 0;
     app.exportOptions.professionalRounded =
-        GetPrivateProfileIntW(L"Settings", L"ProfessionalRounded", 1, app.iniPath.c_str()) != 0;
-    app.exportOptions.samtecLogo =
-        GetPrivateProfileIntW(L"Settings", L"SamtecLogo", 0, app.iniPath.c_str()) != 0;
-    const UINT logoStyle =
-        GetPrivateProfileIntW(L"Settings", L"SamtecLogoStyle", 0, app.iniPath.c_str());
+        preferenceUInt(app.iniPath, L"Settings", L"ProfessionalRounded", 1) != 0;
+    app.exportOptions.samtecLogo = preferenceUInt(app.iniPath, L"Settings", L"SamtecLogo", 0) != 0;
+    const UINT logoStyle = preferenceUInt(app.iniPath, L"Settings", L"SamtecLogoStyle", 0);
     app.exportOptions.samtecStyle = logoStyle < 6 ? static_cast<uint8_t>(logoStyle) : 0;
     app.exportPreferencesDirty = false;
     for (size_t i = 0; i < app.colors.size(); ++i)
     {
         const std::wstring colorKey = std::wstring(ToolNames[i]) + L"Color";
         const std::wstring styleKey = std::wstring(ToolNames[i]) + L"Style";
-        const UINT value = GetPrivateProfileIntW(L"ToolPreferences", colorKey.c_str(),
-                                                app.colors[i], app.iniPath.c_str());
-        const UINT style = GetPrivateProfileIntW(L"ToolPreferences", styleKey.c_str(),
-                                                app.styles[i], app.iniPath.c_str());
+        const UINT value =
+            preferenceUInt(app.iniPath, L"ToolPreferences", colorKey.c_str(), app.colors[i]);
+        const UINT style =
+            preferenceUInt(app.iniPath, L"ToolPreferences", styleKey.c_str(), app.styles[i]);
         if (value <= 0xFFFFFF)
             app.colors[i] = value;
         if (style < StyleCounts[i])
             app.styles[i] = static_cast<uint8_t>(style);
     }
-    const UINT fontSize = GetPrivateProfileIntW(L"ToolPreferences", L"TextFontSize", 24, app.iniPath.c_str());
+    const UINT fontSize = preferenceUInt(app.iniPath, L"ToolPreferences", L"TextFontSize", 24);
     app.fontSize = static_cast<float>(std::clamp(fontSize, 8U, 144U));
-    app.thickness = static_cast<float>(std::clamp(
-        GetPrivateProfileIntW(L"ToolPreferences", L"StrokeWidth", 4, app.iniPath.c_str()), 1U, 100U));
+    app.thickness = static_cast<float>(
+        std::clamp(preferenceUInt(app.iniPath, L"ToolPreferences", L"StrokeWidth", 4), 1U, 100U));
     app.highlightWidth = static_cast<float>(std::clamp(
-        GetPrivateProfileIntW(L"ToolPreferences", L"HighlightWidth", 24, app.iniPath.c_str()), 4U, 80U));
-    app.textBold = GetPrivateProfileIntW(L"ToolPreferences", L"TextBold", 0, app.iniPath.c_str()) != 0;
-    app.textBox = GetPrivateProfileIntW(L"ToolPreferences", L"TextBox", 0, app.iniPath.c_str()) != 0;
-    app.geometryTool = GetPrivateProfileIntW(L"ToolPreferences", L"GeometryTool",
-        static_cast<int>(Tool::Circle), app.iniPath.c_str()) == static_cast<int>(Tool::Rectangle)
-        ? Tool::Rectangle : Tool::Circle;
+        preferenceUInt(app.iniPath, L"ToolPreferences", L"HighlightWidth", 24), 4U, 80U));
+    app.textBold = preferenceUInt(app.iniPath, L"ToolPreferences", L"TextBold", 0) != 0;
+    app.textBox = preferenceUInt(app.iniPath, L"ToolPreferences", L"TextBox", 0) != 0;
+    app.geometryTool =
+        preferenceUInt(app.iniPath, L"ToolPreferences", L"GeometryTool",
+                       static_cast<int>(Tool::Circle)) == static_cast<int>(Tool::Rectangle)
+            ? Tool::Rectangle
+            : Tool::Circle;
     app.toolPreferencesDirty = false;
 }
 bool saveToolPreferences()
 {
-    if (app.paletteDirty)
+    try
     {
-        std::wstring section = L"Count=" + std::to_wstring(app.palette.size());
-        section.push_back(L'\0');
-        for (size_t i = 0; i < app.palette.size(); ++i)
+        std::vector<Setting> changes;
+        std::vector<SettingsSection> sections;
+        auto setting = [&](const wchar_t *section, const std::wstring &key, unsigned value) {
+            changes.push_back({section, key, std::to_wstring(value)});
+        };
+        if (app.paletteDirty)
         {
-            section += std::to_wstring(i) + L"=" + std::to_wstring(app.palette[i]);
-            section.push_back(L'\0');
+            SettingsSection palette{L"Palette", {{L"Count", std::to_wstring(app.palette.size())}}};
+            for (size_t i = 0; i < app.palette.size(); ++i)
+                palette.values.emplace_back(std::to_wstring(i), std::to_wstring(app.palette[i]));
+            sections.push_back(std::move(palette));
         }
-        section.push_back(L'\0');
-        if (!WritePrivateProfileSectionW(L"Palette", section.c_str(), app.iniPath.c_str()))
-            return false;
-        app.paletteDirty = false;
-    }
-    if (app.layoutPreferencesDirty)
-    {
-        if (!WritePrivateProfileStringW(L"Settings", L"CollapsedRows",
-            std::to_wstring(app.collapsedRows).c_str(), app.iniPath.c_str()))
-            return false;
-        app.layoutPreferencesDirty = false;
-    }
-    if (app.exportPreferencesDirty)
-    {
-        if (!WritePrivateProfileStringW(L"Settings", L"ProfessionalBorder",
-                                        app.exportOptions.professionalBorder ? L"1" : L"0",
-                                        app.iniPath.c_str()) ||
-            !WritePrivateProfileStringW(L"Settings", L"ProfessionalBlur",
-                                        app.exportOptions.professionalBlur ? L"1" : L"0",
-                                        app.iniPath.c_str()) ||
-            !WritePrivateProfileStringW(L"Settings", L"ProfessionalRounded",
-                                        app.exportOptions.professionalRounded ? L"1" : L"0",
-                                        app.iniPath.c_str()) ||
-            !WritePrivateProfileStringW(L"Settings", L"SamtecLogo",
-                                        app.exportOptions.samtecLogo ? L"1" : L"0",
-                                        app.iniPath.c_str()) ||
-            !WritePrivateProfileStringW(L"Settings", L"SamtecLogoStyle",
-                                        std::to_wstring(app.exportOptions.samtecStyle).c_str(),
-                                        app.iniPath.c_str()))
-            return false;
-        app.exportPreferencesDirty = false;
-    }
-    if (!app.toolPreferencesDirty)
+        if (app.layoutPreferencesDirty)
+            setting(L"Settings", L"CollapsedRows", app.collapsedRows);
+        if (app.exportPreferencesDirty)
+        {
+            setting(L"Settings", L"ProfessionalBorder", app.exportOptions.professionalBorder);
+            setting(L"Settings", L"ProfessionalBlur", app.exportOptions.professionalBlur);
+            setting(L"Settings", L"ProfessionalRounded", app.exportOptions.professionalRounded);
+            setting(L"Settings", L"SamtecLogo", app.exportOptions.samtecLogo);
+            setting(L"Settings", L"SamtecLogoStyle", app.exportOptions.samtecStyle);
+        }
+        if (app.rendererPreferencesDirty)
+            setting(L"Settings", L"SoftwareRendering", app.softwareRendering);
+        if (app.shortcutsDirty)
+        {
+            setting(L"Settings", L"Hotkey", app.hotkey);
+            setting(L"Settings", L"InstantHotkey", app.instantHotkey);
+        }
+        if (app.toolPreferencesDirty)
+        {
+            for (size_t i = 0; i < app.colors.size(); ++i)
+            {
+                setting(L"ToolPreferences", std::wstring(ToolNames[i]) + L"Color", app.colors[i]);
+                setting(L"ToolPreferences", std::wstring(ToolNames[i]) + L"Style", app.styles[i]);
+            }
+            setting(L"ToolPreferences", L"TextFontSize", static_cast<unsigned>(app.fontSize));
+            setting(L"ToolPreferences", L"StrokeWidth", static_cast<unsigned>(app.thickness));
+            setting(L"ToolPreferences", L"HighlightWidth",
+                    static_cast<unsigned>(app.highlightWidth));
+            setting(L"ToolPreferences", L"TextBold", app.textBold);
+            setting(L"ToolPreferences", L"TextBox", app.textBox);
+            setting(L"ToolPreferences", L"GeometryTool", static_cast<unsigned>(app.geometryTool));
+        }
+        commitPreferences(app.iniPath, changes, sections);
+        app.paletteDirty = app.layoutPreferencesDirty = app.exportPreferencesDirty = false;
+        app.toolPreferencesDirty = app.shortcutsDirty = app.rendererPreferencesDirty = false;
+        app.preferenceError.clear();
         return true;
-    // A single small section write on close/exit, never on a drawing or rendering event.
-    std::wstring section;
-    for (size_t i = 0; i < app.colors.size(); ++i)
-    {
-        section += std::wstring(ToolNames[i]) + L"Color=" + std::to_wstring(app.colors[i]);
-        section.push_back(L'\0');
-        section += std::wstring(ToolNames[i]) + L"Style=" + std::to_wstring(app.styles[i]);
-        section.push_back(L'\0');
     }
-    auto preference = [&](const wchar_t *key, int value) {
-        section += std::wstring(key) + L"=" + std::to_wstring(value);
-        section.push_back(L'\0');
-    };
-    preference(L"TextFontSize", static_cast<int>(app.fontSize));
-    preference(L"StrokeWidth", static_cast<int>(app.thickness));
-    preference(L"HighlightWidth", static_cast<int>(app.highlightWidth));
-    preference(L"TextBold", app.textBold);
-    preference(L"TextBox", app.textBox);
-    preference(L"GeometryTool", static_cast<int>(app.geometryTool));
-    section.push_back(L'\0');
-    if (!WritePrivateProfileSectionW(L"ToolPreferences", section.c_str(), app.iniPath.c_str()))
+    catch (const std::exception &failure)
+    {
+        app.preferenceError = failure.what();
         return false;
-    app.toolPreferencesDirty = false;
-    return true;
+    }
 }
 void saveToolPreferencesOrNotify()
 {
     if (!saveToolPreferences())
-        error(app.window, "Preferences could not be saved. Keep Snipper in a writable folder.");
+        error(app.window, app.preferenceError.c_str());
 }
 std::wstring hotkeyName(WORD value)
 {
@@ -648,7 +649,8 @@ bool registerShortcuts(WORD area, WORD full, bool notify = true)
     for (WORD value : {area, full})
     {
         BYTE key = LOBYTE(value), flags = HIBYTE(value);
-        if (key && ((!(flags & (HOTKEYF_CONTROL | HOTKEYF_ALT)) && key != VK_PAUSE) || key == VK_F12))
+        if (key &&
+            ((!(flags & (HOTKEYF_CONTROL | HOTKEYF_ALT)) && key != VK_PAUSE) || key == VK_F12))
             return reject(L"Use Ctrl or Alt, or Pause by itself. F12 is reserved by Windows.");
     }
     if (LOBYTE(area) && LOBYTE(full) && LOBYTE(area) == LOBYTE(full) &&
@@ -663,19 +665,25 @@ bool registerShortcuts(WORD area, WORD full, bool notify = true)
         UnregisterHotKey(app.window, app.instantHotkeyId);
     const int areaId = app.hotkeyId == 1 ? 2 : 1;
     const int fullId = app.instantHotkeyId == 3 ? 4 : 3;
-    const bool areaOK = !LOBYTE(area) || RegisterHotKey(app.window, areaId, hotkeyModifiers(area), LOBYTE(area));
-    const bool fullOK = areaOK && (!LOBYTE(full) ||
-        RegisterHotKey(app.window, fullId, hotkeyModifiers(full), LOBYTE(full)));
+    const bool areaOK =
+        !LOBYTE(area) || RegisterHotKey(app.window, areaId, hotkeyModifiers(area), LOBYTE(area));
+    const bool fullOK =
+        areaOK &&
+        (!LOBYTE(full) || RegisterHotKey(app.window, fullId, hotkeyModifiers(full), LOBYTE(full)));
     if (!fullOK)
     {
-        if (areaOK && LOBYTE(area)) UnregisterHotKey(app.window, areaId);
+        if (areaOK && LOBYTE(area))
+            UnregisterHotKey(app.window, areaId);
         if (app.hotkeyRegistered)
-            app.hotkeyRegistered = RegisterHotKey(app.window, app.hotkeyId,
-                hotkeyModifiers(app.hotkey), LOBYTE(app.hotkey)) != FALSE;
+            app.hotkeyRegistered =
+                RegisterHotKey(app.window, app.hotkeyId, hotkeyModifiers(app.hotkey),
+                               LOBYTE(app.hotkey)) != FALSE;
         if (app.instantHotkeyRegistered)
-            app.instantHotkeyRegistered = RegisterHotKey(app.window, app.instantHotkeyId,
-                hotkeyModifiers(app.instantHotkey), LOBYTE(app.instantHotkey)) != FALSE;
-        return reject(L"A shortcut is already in use or reserved by Windows. Choose another combination.");
+            app.instantHotkeyRegistered =
+                RegisterHotKey(app.window, app.instantHotkeyId, hotkeyModifiers(app.instantHotkey),
+                               LOBYTE(app.instantHotkey)) != FALSE;
+        return reject(
+            L"A shortcut is already in use or reserved by Windows. Choose another combination.");
     }
     app.hotkey = area;
     app.instantHotkey = full;
@@ -685,43 +693,16 @@ bool registerShortcuts(WORD area, WORD full, bool notify = true)
     app.instantHotkeyRegistered = LOBYTE(full) != 0;
     return true;
 }
-std::wstring executablePath()
-{
-    wchar_t path[32768]{};
-    GetModuleFileNameW(nullptr, path, 32768);
-    return path;
-}
 bool startupEnabled()
 {
-    HKEY key = nullptr;
-    wchar_t value[32768]{};
-    DWORD size = sizeof(value), type = 0;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-        return false;
-    LONG result =
-        RegQueryValueExW(key, L"JackSnip", nullptr, &type, reinterpret_cast<BYTE *>(value), &size);
-    RegCloseKey(key);
-    return result == ERROR_SUCCESS && type == REG_SZ &&
-           std::wstring(value) == L"\"" + executablePath() + L"\" --tray";
+    return snip::startupEnabled(executablePath());
 }
 void toggleStartup()
 {
-    bool enabled = startupEnabled();
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                        nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
-        throw std::runtime_error("Windows did not allow changing the startup setting.");
-    std::wstring value = L"\"" + executablePath() + L"\" --tray";
-    LONG result = enabled
-                      ? RegDeleteValueW(key, L"JackSnip")
-                      : RegSetValueExW(key, L"JackSnip", 0, REG_SZ,
-                                       reinterpret_cast<const BYTE *>(value.c_str()),
-                                       static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
-    RegCloseKey(key);
-    if (result != ERROR_SUCCESS)
-        throw std::runtime_error("Could not update the startup setting.");
-    status(enabled ? L"Run at sign-in disabled" : L"Snipper will start quietly at sign-in");
+    const auto path = executablePath();
+    const bool enabled = snip::startupEnabled(path);
+    setStartupEnabled(path, !enabled);
+    status(enabled ? L"Run at sign-in disabled" : L"Tiger Snip will start quietly at sign-in");
 }
 void addTray()
 {
@@ -732,7 +713,7 @@ void addTray()
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = TrayMessage;
     data.hIcon = LoadIconW(app.instance, MAKEINTRESOURCEW(101));
-    wcscpy_s(data.szTip, L"Snipper - click to snip; right-click for menu");
+    wcscpy_s(data.szTip, L"Tiger Snip - click to snip; right-click for menu");
     app.tray = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
 }
 void removeTray()
@@ -753,12 +734,14 @@ void chooseWelcomeMessage()
     const bool previous = app.welcomeMessage < WelcomeMessages.size();
     std::uniform_int_distribution<size_t> choice(0, WelcomeMessages.size() - (previous ? 2 : 1));
     size_t next = choice(random);
-    if (previous && next >= app.welcomeMessage) ++next;
+    if (previous && next >= app.welcomeMessage)
+        ++next;
     app.welcomeMessage = next;
 }
 void showEditor()
 {
-    if (!hasImage()) chooseWelcomeMessage();
+    if (!hasImage())
+        chooseWelcomeMessage();
     // Undo capture-time cloaking before restoring the editor.
     const BOOL uncloaked = FALSE;
     DwmSetWindowAttribute(app.window, DWMWA_CLOAK, &uncloaked, sizeof(uncloaked));
@@ -768,7 +751,7 @@ void showEditor()
 }
 void updateTitle()
 {
-    std::wstring title = app.diagnosticInstance ? L"Snipper - Resize diagnostic" : L"Snipper";
+    std::wstring title = app.diagnosticInstance ? L"Tiger Snip - Resize diagnostic" : L"Tiger Snip";
     if (hasImage())
         title += L"  |  " + std::to_wstring(app.image.width) + L" x " +
                  std::to_wstring(app.image.height) + (app.dirty ? L"  *" : L"");
@@ -807,36 +790,44 @@ Bitmap recentThumbnail(const Bitmap &source)
 {
     const float scale = std::min({1.0f, 400.0f / source.width, 224.0f / source.height});
     auto thumb = Bitmap::create(std::max(1, static_cast<int>(std::round(source.width * scale))),
-                               std::max(1, static_cast<int>(std::round(source.height * scale))));
+                                std::max(1, static_cast<int>(std::round(source.height * scale))));
     for (int y = 0; y < thumb.height; ++y)
         for (int x = 0; x < thumb.width; ++x)
         {
-            const float sx = std::clamp((x + .5f) * source.width / thumb.width - .5f, 0.0f, source.width - 1.0f);
-            const float sy = std::clamp((y + .5f) * source.height / thumb.height - .5f, 0.0f, source.height - 1.0f);
+            const float sx =
+                std::clamp((x + .5f) * source.width / thumb.width - .5f, 0.0f, source.width - 1.0f);
+            const float sy = std::clamp((y + .5f) * source.height / thumb.height - .5f, 0.0f,
+                                        source.height - 1.0f);
             const int left = static_cast<int>(sx), top = static_cast<int>(sy);
             const float fx = sx - left, fy = sy - top;
             float channels[4]{};
             for (int dy = 0; dy < 2; ++dy)
                 for (int dx = 0; dx < 2; ++dx)
                 {
-                    const size_t p = (static_cast<size_t>(std::min(top + dy, source.height - 1)) * source.width +
-                                      std::min(left + dx, source.width - 1)) * 4;
+                    const size_t p =
+                        (static_cast<size_t>(std::min(top + dy, source.height - 1)) * source.width +
+                         std::min(left + dx, source.width - 1)) *
+                        4;
                     const float weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
                     channels[3] += source.pixels[p + 3] * weight;
                     for (int c = 0; c < 3; ++c)
-                        channels[c] += source.pixels[p + c] * source.pixels[p + 3] / 255.0f * weight;
+                        channels[c] +=
+                            source.pixels[p + c] * source.pixels[p + 3] / 255.0f * weight;
                 }
             const size_t out = (static_cast<size_t>(y) * thumb.width + x) * 4;
             for (int c = 0; c < 3; ++c)
-                thumb.pixels[out + c] = channels[3] > 0
-                    ? static_cast<uint8_t>(std::clamp(std::lround(channels[c] * 255 / channels[3]), 0L, 255L)) : 0;
+                thumb.pixels[out + c] =
+                    channels[3] > 0 ? static_cast<uint8_t>(std::clamp(
+                                          std::lround(channels[c] * 255 / channels[3]), 0L, 255L))
+                                    : 0;
             thumb.pixels[out + 3] = static_cast<uint8_t>(std::lround(channels[3]));
         }
     return thumb;
 }
 void refreshRecentThumbnail()
 {
-    if (hasImage() && app.activeRecent >= 0 && app.activeRecent < static_cast<int>(app.recent.size()))
+    if (hasImage() && app.activeRecent >= 0 &&
+        app.activeRecent < static_cast<int>(app.recent.size()))
     {
         auto &snip = app.recent[app.activeRecent];
         snip.thumbnail = recentThumbnail(previewImage());
@@ -845,7 +836,8 @@ void refreshRecentThumbnail()
 }
 void stashRecentSnip()
 {
-    if (!hasImage() || app.activeRecent < 0 || app.activeRecent >= static_cast<int>(app.recent.size()))
+    if (!hasImage() || app.activeRecent < 0 ||
+        app.activeRecent >= static_cast<int>(app.recent.size()))
         return;
     finishDrag(true);
     finishTextEditing();
@@ -865,7 +857,8 @@ void stashRecentSnip()
 }
 void restoreRecentSnip(int index)
 {
-    if (index < 0 || index >= static_cast<int>(app.recent.size()) || app.capturePending || app.overlay)
+    if (index < 0 || index >= static_cast<int>(app.recent.size()) || app.capturePending ||
+        app.overlay)
         return;
     closeRecent();
     if (index == app.activeRecent)
@@ -933,8 +926,10 @@ void updateView()
     if (!app.fit && app.viewViewport.width() > 0 && app.viewViewport != r)
     {
         const auto old = app.viewViewport;
-        const Point focus = app.view.toImage({(old.left + old.right) / 2, (old.top + old.bottom) / 2});
-        app.view.origin = Point{(r.left + r.right) / 2, (r.top + r.bottom) / 2} - focus * app.view.scale;
+        const Point focus =
+            app.view.toImage({(old.left + old.right) / 2, (old.top + old.bottom) / 2});
+        app.view.origin =
+            Point{(r.left + r.right) / 2, (r.top + r.bottom) / 2} - focus * app.view.scale;
     }
     app.fit = app.fit || app.view.scale <= minimum + .00001f;
     if (app.fit)
@@ -1007,8 +1002,8 @@ Bitmap penCursorPixels(float diameter, Color value)
             for (int channel = 0; channel < 3; ++channel)
             {
                 const unsigned component = (value >> ((2 - channel) * 8)) & 255;
-                bitmap.pixels[offset + channel] = static_cast<uint8_t>(
-                    std::round(255 * (outer - black) + component * fill));
+                bitmap.pixels[offset + channel] =
+                    static_cast<uint8_t>(std::round(255 * (outer - black) + component * fill));
             }
             bitmap.pixels[offset + 3] = static_cast<uint8_t>(std::round(255 * outer));
         }
@@ -1076,8 +1071,9 @@ HCURSOR alphaCursor(const Bitmap &pixels, DWORD hotspotX, DWORD hotspotY)
         for (size_t i = 0; i < pixels.pixels.size(); i += 4)
             if (nativePixels[i + 3])
                 for (int c = 0; c < 3; ++c)
-                    nativePixels[i + c] = static_cast<uint8_t>(std::min(255,
-                        (nativePixels[i + c] * 255 + nativePixels[i + 3] / 2) / nativePixels[i + 3]));
+                    nativePixels[i + c] = static_cast<uint8_t>(
+                        std::min(255, (nativePixels[i + c] * 255 + nativePixels[i + 3] / 2) /
+                                          nativePixels[i + 3]));
         ICONINFO icon{};
         icon.xHotspot = hotspotX;
         icon.yHotspot = hotspotY;
@@ -1094,12 +1090,14 @@ HCURSOR alphaCursor(const Bitmap &pixels, DWORD hotspotX, DWORD hotspotY)
 HCURSOR currentPenCursor()
 {
     const bool highlight = app.tool == Tool::Highlight;
-    const float diameter = std::max(1.0f, (highlight ? app.highlightWidth : app.thickness) * app.view.scale * app.dpi);
+    const float diameter =
+        std::max(1.0f, (highlight ? app.highlightWidth : app.thickness) * app.view.scale * app.dpi);
     const Color value = app.colors[static_cast<size_t>(highlight ? Tool::Highlight : Tool::Pen)];
     if (app.penCursor && std::abs(diameter - app.penCursorDiameter) < .001f &&
         value == app.penCursorColor && app.penCursorTool == app.tool)
         return app.penCursor;
-    const auto pixels = highlight ? chiselCursorPixels(diameter, value) : penCursorPixels(diameter, value);
+    const auto pixels =
+        highlight ? chiselCursorPixels(diameter, value) : penCursorPixels(diameter, value);
     HCURSOR cursor = alphaCursor(pixels, pixels.width / 2, pixels.height / 2);
     if (!cursor)
         return LoadCursorW(nullptr, IDC_ARROW);
@@ -1125,15 +1123,18 @@ HCURSOR currentEraserCursor()
     for (int y = 0; y < pixels.height; ++y)
         for (int x = 0; x < pixels.width; ++x)
         {
-            const float coverage = std::clamp(std::hypot(x + .5f - center, y + .5f - center) -
-                                               (6 * app.dpi - 1), 0.0f, 1.0f);
+            const float coverage = std::clamp(
+                std::hypot(x + .5f - center, y + .5f - center) - (6 * app.dpi - 1), 0.0f, 1.0f);
             const size_t offset = (static_cast<size_t>(y) * pixels.width + x) * 4;
             for (int channel = 0; channel < 4; ++channel)
-                pixels.pixels[offset + channel] = static_cast<uint8_t>(std::round(pixels.pixels[offset + channel] * coverage));
+                pixels.pixels[offset + channel] =
+                    static_cast<uint8_t>(std::round(pixels.pixels[offset + channel] * coverage));
         }
     const auto cursor = alphaCursor(pixels, pixels.width / 2, pixels.height / 2);
-    if (!cursor) return LoadCursorW(nullptr, IDC_CROSS);
-    if (app.eraserCursor) DestroyCursor(app.eraserCursor);
+    if (!cursor)
+        return LoadCursorW(nullptr, IDC_CROSS);
+    if (app.eraserCursor)
+        DestroyCursor(app.eraserCursor);
     app.eraserCursor = cursor;
     app.eraserCursorDpi = app.dpi;
     return cursor;
@@ -1158,17 +1159,18 @@ HCURSOR currentGrabCursor(bool closed)
     if (!cursor)
     {
         // Open palm / gripping fist with transparent antialiased edges.
-        const std::vector<Point> outline = closed
-            ? std::vector<Point>{{8, 17}, {8, 12}, {10, 10}, {13, 10}, {14, 9}, {17, 9},
-                                 {18, 10}, {21, 10}, {22, 12}, {25, 13}, {25, 20},
-                                 {22, 25}, {12, 25}, {6, 19}, {6, 17}}
-            : std::vector<Point>{{10, 18}, {10, 9}, {11, 7}, {13, 7}, {14, 9}, {14, 16},
-                                 {15, 16}, {15, 5}, {16, 3}, {18, 3}, {19, 5}, {19, 16},
-                                 {20, 16}, {20, 7}, {21, 5}, {23, 5}, {24, 7}, {24, 18},
-                                 {25, 18}, {25, 11}, {26, 10}, {28, 10}, {29, 12},
-                                 {29, 21}, {25, 27}, {14, 27}, {5, 19}, {5, 17}, {7, 15}};
+        const std::vector<Point> outline =
+            closed ? std::vector<Point>{{8, 17},  {8, 12},  {10, 10}, {13, 10}, {14, 9},
+                                        {17, 9},  {18, 10}, {21, 10}, {22, 12}, {25, 13},
+                                        {25, 20}, {22, 25}, {12, 25}, {6, 19},  {6, 17}}
+                   : std::vector<Point>{{10, 18}, {10, 9},  {11, 7},  {13, 7},  {14, 9},  {14, 16},
+                                        {15, 16}, {15, 5},  {16, 3},  {18, 3},  {19, 5},  {19, 16},
+                                        {20, 16}, {20, 7},  {21, 5},  {23, 5},  {24, 7},  {24, 18},
+                                        {25, 18}, {25, 11}, {26, 10}, {28, 10}, {29, 12}, {29, 21},
+                                        {25, 27}, {14, 27}, {5, 19},  {5, 17},  {7, 15}};
         const float d = app.dpi;
-        auto pixels = Bitmap::create(static_cast<int>(std::ceil(32 * d)), static_cast<int>(std::ceil(32 * d)));
+        auto pixels = Bitmap::create(static_cast<int>(std::ceil(32 * d)),
+                                     static_cast<int>(std::ceil(32 * d)));
         for (int y = 0; y < pixels.height; ++y)
             for (int x = 0; x < pixels.width; ++x)
             {
@@ -1183,7 +1185,8 @@ HCURSOR currentGrabCursor(bool closed)
                         inside = !inside;
                     const auto ab = b - a, ap = p - a;
                     const float t = std::clamp((ap.x * ab.x + ap.y * ab.y) /
-                                              std::max(.001f, ab.x * ab.x + ab.y * ab.y), 0.0f, 1.0f);
+                                                   std::max(.001f, ab.x * ab.x + ab.y * ab.y),
+                                               0.0f, 1.0f);
                     distance = std::min(distance, length(p - (a + ab * t)));
                 }
                 const float signedDistance = (inside ? distance : -distance) * d;
@@ -1191,7 +1194,8 @@ HCURSOR currentGrabCursor(bool closed)
                 const float fill = std::clamp(signedDistance - d + .5f, 0.0f, 1.0f);
                 const size_t i = (static_cast<size_t>(y) * pixels.width + x) * 4;
                 for (int c = 0; c < 3; ++c)
-                    pixels.pixels[i + c] = static_cast<uint8_t>(std::round(32 * alpha + 223 * fill));
+                    pixels.pixels[i + c] =
+                        static_cast<uint8_t>(std::round(32 * alpha + 223 * fill));
                 pixels.pixels[i + 3] = static_cast<uint8_t>(std::round(255 * alpha));
             }
         cursor = alphaCursor(pixels, static_cast<DWORD>(16 * d), static_cast<DWORD>(16 * d));
@@ -1201,8 +1205,9 @@ HCURSOR currentGrabCursor(bool closed)
 std::vector<Point> handles(const Annotation &item);
 bool handPanAt(Point point)
 {
-    if (app.tool != Tool::Select || app.erasing || app.cropping || app.pickingColor || !canPanImage() ||
-        !canvasRect().contains(point) || !imageContentRect().contains(app.view.toImage(point)))
+    if (app.tool != Tool::Select || app.erasing || app.cropping || app.pickingColor ||
+        !canPanImage() || !canvasRect().contains(point) ||
+        !imageContentRect().contains(app.view.toImage(point)))
         return false;
     if (selected())
         for (auto handle : handles(app.document.items[app.document.selected]))
@@ -1214,8 +1219,7 @@ bool enabled(int id);
 HCURSOR editorCursor(Point point)
 {
     const bool onCanvas = hasImage() && canvasRect().contains(point);
-    if (app.drag == Drag::Pan ||
-        (onCanvas && app.spaceDown && canPanImage()))
+    if (app.drag == Drag::Pan || (onCanvas && app.spaceDown && canPanImage()))
         return currentGrabCursor(app.drag == Drag::Pan);
     const bool onButton = std::any_of(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
         if (app.recentOpen && recentPanelRect().contains(point) && !recentPanelCommand(b.command))
@@ -1271,23 +1275,28 @@ void testPenCursor()
                     if (!app.penCursor || cursor != app.penCursor || !GetIconInfo(cursor, &info))
                         throw std::runtime_error("Pen cursor creation failed.");
                     BITMAP bitmap{};
-                    const bool dimensions = GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap) &&
+                    const bool dimensions =
+                        GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap) &&
                         bitmap.bmWidth == pixels.width && bitmap.bmHeight == pixels.height &&
                         info.xHotspot == static_cast<DWORD>(pixels.width / 2) &&
                         info.yHotspot == static_cast<DWORD>(pixels.height / 2) && !info.fIcon;
                     DeleteObject(info.hbmColor);
                     DeleteObject(info.hbmMask);
-                    const size_t center = (static_cast<size_t>(pixels.height / 2) * pixels.width +
-                                           pixels.width / 2) * 4;
-                    if (!dimensions || pixels.sample({static_cast<float>(pixels.width / 2),
-                            static_cast<float>(pixels.height / 2)}) != value ||
+                    const size_t center =
+                        (static_cast<size_t>(pixels.height / 2) * pixels.width + pixels.width / 2) *
+                        4;
+                    if (!dimensions ||
+                        pixels.sample({static_cast<float>(pixels.width / 2),
+                                       static_cast<float>(pixels.height / 2)}) != value ||
                         pixels.pixels[center + 3] != 255 || pixels.pixels[3] != 0 ||
                         currentPenCursor() != cursor)
-                        throw std::runtime_error("Pen cursor size, color, hotspot, or caching failed: thickness=" +
-                            std::to_string(thickness) + " zoom=" + std::to_string(zoom) +
-                            " dpi=" + std::to_string(dpi) + " bitmap=" + std::to_string(bitmap.bmWidth) +
-                            "x" + std::to_string(bitmap.bmHeight) + " expected=" + std::to_string(pixels.width) +
-                            " hotspot=" + std::to_string(info.xHotspot) + "," + std::to_string(info.yHotspot));
+                        throw std::runtime_error(
+                            "Pen cursor size, color, hotspot, or caching failed: thickness=" +
+                            std::to_string(thickness) + " zoom=" + std::to_string(zoom) + " dpi=" +
+                            std::to_string(dpi) + " bitmap=" + std::to_string(bitmap.bmWidth) +
+                            "x" + std::to_string(bitmap.bmHeight) +
+                            " expected=" + std::to_string(pixels.width) + " hotspot=" +
+                            std::to_string(info.xHotspot) + "," + std::to_string(info.yHotspot));
                 }
     DestroyCursor(app.penCursor);
     app.penCursor = nullptr;
@@ -1309,8 +1318,10 @@ Bitmap compositeCursor(const Bitmap &source, HCURSOR cursor, int x, int y)
     HBITMAP surface = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
     if (!dc || !surface || !bits)
     {
-        if (surface) DeleteObject(surface);
-        if (dc) DeleteDC(dc);
+        if (surface)
+            DeleteObject(surface);
+        if (dc)
+            DeleteDC(dc);
         throw std::runtime_error("Cannot allocate native cursor composition test.");
     }
     auto previous = SelectObject(dc, surface);
@@ -1321,8 +1332,10 @@ Bitmap compositeCursor(const Bitmap &source, HCURSOR cursor, int x, int y)
     SelectObject(dc, previous);
     DeleteObject(surface);
     DeleteDC(dc);
-    if (!drawn) throw std::runtime_error("Cannot draw native cursor for visual test.");
-    for (size_t i = 3; i < result.pixels.size(); i += 4) result.pixels[i] = 255;
+    if (!drawn)
+        throw std::runtime_error("Cannot draw native cursor for visual test.");
+    for (size_t i = 3; i < result.pixels.size(); i += 4)
+        result.pixels[i] = 255;
     return result;
 }
 void testChiselCursor()
@@ -1353,20 +1366,27 @@ void testChiselCursor()
                         for (size_t i = 0; i < drawn.pixels.size(); i += 4)
                             for (int c = 0; c < 3; ++c)
                             {
-                                const int expected = pixels.pixels[i + c] +
-                                    (source.pixels[i + c] * (255 - pixels.pixels[i + 3]) + 127) / 255;
+                                const int expected =
+                                    pixels.pixels[i + c] +
+                                    (source.pixels[i + c] * (255 - pixels.pixels[i + 3]) + 127) /
+                                        255;
                                 if (std::abs(drawn.pixels[i + c] - expected) > 2)
                                 {
-                                    saveBytes(L"chisel-cursor-failure.png", app.graphics.png(drawn));
-                                    throw std::runtime_error("Native chisel cursor alpha mismatch: width=" +
+                                    saveBytes(L"chisel-cursor-failure.png",
+                                              app.graphics.png(drawn));
+                                    throw std::runtime_error(
+                                        "Native chisel cursor alpha mismatch: width=" +
                                         std::to_string(width) + " zoom=" + std::to_string(zoom) +
-                                        " dpi=" + std::to_string(dpi) + " pixel=" + std::to_string(i / 4) +
-                                        " channel=" + std::to_string(c) + " actual=" +
-                                        std::to_string(drawn.pixels[i + c]) + " expected=" + std::to_string(expected) +
+                                        " dpi=" + std::to_string(dpi) + " pixel=" +
+                                        std::to_string(i / 4) + " channel=" + std::to_string(c) +
+                                        " actual=" + std::to_string(drawn.pixels[i + c]) +
+                                        " expected=" + std::to_string(expected) +
                                         " alpha=" + std::to_string(pixels.pixels[i + 3]));
                                 }
-                                if (!pixels.pixels[i + 3] && drawn.pixels[i + c] != source.pixels[i + c])
-                                    throw std::runtime_error("Transparent chisel cursor pixels changed the image.");
+                                if (!pixels.pixels[i + 3] &&
+                                    drawn.pixels[i + c] != source.pixels[i + c])
+                                    throw std::runtime_error(
+                                        "Transparent chisel cursor pixels changed the image.");
                             }
                     }
                 }
@@ -1375,8 +1395,10 @@ void testChiselCursor()
         for (int x = 0; x < preview.width; ++x)
         {
             const size_t i = (static_cast<size_t>(y) * preview.width + x) * 4;
-            const Color background = x < 240 ? rgb(245, 240, 225) : x < 480 ? rgb(18, 30, 42)
-                : ((x / 12 + y / 12) % 2 ? rgb(42, 105, 128) : rgb(146, 80, 70));
+            const Color background =
+                x < 240   ? rgb(245, 240, 225)
+                : x < 480 ? rgb(18, 30, 42)
+                          : ((x / 12 + y / 12) % 2 ? rgb(42, 105, 128) : rgb(146, 80, 70));
             preview.pixels[i] = (background >> 16) & 255;
             preview.pixels[i + 1] = (background >> 8) & 255;
             preview.pixels[i + 2] = background & 255;
@@ -1390,8 +1412,8 @@ void testChiselCursor()
             app.highlightWidth = row == 0 ? 4 : row == 1 ? 24 : 80;
             const auto cursor = currentPenCursor();
             const auto pixels = chiselCursorPixels(app.highlightWidth, Palette[2]);
-            preview = compositeCursor(preview, cursor,
-                column * 240 + 120 - pixels.width / 2, row * 80 + 40 - pixels.height / 2);
+            preview = compositeCursor(preview, cursor, column * 240 + 120 - pixels.width / 2,
+                                      row * 80 + 40 - pixels.height / 2);
         }
     saveBytes(L"chisel-cursor-preview.png", app.graphics.png(preview));
     app.tool = Tool::Select;
@@ -1419,15 +1441,17 @@ bool recentPanelCommand(int id)
 int recentVisibleRows()
 {
     const float top = app.fullScreen ? 8 : (!(app.collapsedRows & 1) ? 55 : 28);
-    return std::clamp(static_cast<int>((clientDips().bottom - StatusHeight - top - 90) / 112), 1, 5);
+    return std::clamp(static_cast<int>((clientDips().bottom - StatusHeight - top - 90) / 112), 1,
+                      5);
 }
 Rect recentPanelRect()
 {
     const auto client = clientDips();
-    const int rows = std::min(recentVisibleRows(), std::max(1, (static_cast<int>(app.recent.size()) + 1) / 2));
+    const int rows =
+        std::min(recentVisibleRows(), std::max(1, (static_cast<int>(app.recent.size()) + 1) / 2));
     const float width = std::min(384.0f, client.width() - 16), height = 82 + rows * 112.0f;
     const float top = app.fullScreen ? client.bottom - StatusHeight - height - 8
-        : (!(app.collapsedRows & 1) ? 55 : 28);
+                                     : (!(app.collapsedRows & 1) ? 55 : 28);
     return {client.right - width - 8, top, client.right - 8, top + height};
 }
 ToolbarLayout toolbarLayout()
@@ -1435,7 +1459,8 @@ ToolbarLayout toolbarLayout()
     const float width = clientDips().right;
     const float formattingWidth = textMode() ? 264 : 160;
     // Center the whole label/control group between the eyedropper and zoom controls.
-    const float paletteRight = 70 + 34 * std::min(static_cast<int>(app.palette.size()) + 2, paletteColumns());
+    const float paletteRight =
+        70 + 34 * std::min(static_cast<int>(app.palette.size()) + 2, paletteColumns());
     const float formattingLeft = (paletteRight + width - 140 - formattingWidth) / 2;
     return {{20, rowTop(1) + 15, width >= 980 ? 466.0f : 318.0f, rowTop(1) + 59},
             {width - 504, rowTop(1) + 15, width - 20, rowTop(1) + 59},
@@ -1504,7 +1529,8 @@ void buildButtons()
             if (i < static_cast<int>(app.palette.size()))
                 app.buttons.push_back({{x, top + 2, x + 24, top + 26}, ColorFirst + i, L""});
             else
-                add(i == static_cast<int>(app.palette.size()) ? CustomColor : Eyedropper, L"", 28, top, 28);
+                add(i == static_cast<int>(app.palette.size()) ? CustomColor : Eyedropper, L"", 28,
+                    top, 28);
         }
         if (!app.erasing)
         {
@@ -1558,12 +1584,15 @@ void buildButtons()
         const auto a = app.view.toScreen({box.left, box.top});
         const auto b = app.view.toScreen({box.right, box.bottom});
         constexpr float width = 58, height = 28, margin = 8;
-        if (b.x >= canvas.left && a.x <= canvas.right && b.y >= canvas.top && a.y <= canvas.bottom &&
-            canvas.width() >= width + margin * 2 && canvas.height() >= height + margin * 2)
+        if (b.x >= canvas.left && a.x <= canvas.right && b.y >= canvas.top &&
+            a.y <= canvas.bottom && canvas.width() >= width + margin * 2 &&
+            canvas.height() >= height + margin * 2)
         {
-            x = std::clamp((a.x + b.x - width) / 2, canvas.left + margin, canvas.right - width - margin);
-            const float y = std::clamp(a.y - height - 12 >= canvas.top + margin
-                ? a.y - height - 12 : b.y + 12, canvas.top + margin, canvas.bottom - height - margin);
+            x = std::clamp((a.x + b.x - width) / 2, canvas.left + margin,
+                           canvas.right - width - margin);
+            const float y =
+                std::clamp(a.y - height - 12 >= canvas.top + margin ? a.y - height - 12 : b.y + 12,
+                           canvas.top + margin, canvas.bottom - height - margin);
             add(FlipCurvedArrow, L"Flip", width, y, height);
         }
     }
@@ -1571,7 +1600,8 @@ void buildButtons()
     if (app.recentOpen)
     {
         const auto panel = recentPanelRect();
-        const int rows = recentVisibleRows(), totalRows = (static_cast<int>(app.recent.size()) + 1) / 2;
+        const int rows = recentVisibleRows(),
+                  totalRows = (static_cast<int>(app.recent.size()) + 1) / 2;
         app.recentScroll = std::clamp(app.recentScroll, 0, std::max(0, totalRows - rows));
         x = panel.right - 40;
         add(RecentClose, L"\u00D7", 28, panel.top + 10, 28);
@@ -1579,7 +1609,8 @@ void buildButtons()
         for (int slot = 0; slot < rows * 2; ++slot)
         {
             const int index = static_cast<int>(app.recent.size()) - 1 - app.recentScroll * 2 - slot;
-            if (index < 0) break;
+            if (index < 0)
+                break;
             x = panel.left + 14 + (slot % 2) * (cellWidth + 10);
             add(RecentChoiceFirst + index, L"", cellWidth, panel.top + 48 + (slot / 2) * 112, 104);
         }
@@ -1640,7 +1671,8 @@ void buildButtons()
                 hint = L"Highlight (H) - translucent chisel brush; color and width are remembered";
                 break;
             case EraserTool:
-                hint = L"Eraser (E) - click or drag to delete whole strokes and annotations; Ctrl+Z undoes";
+                hint = L"Eraser (E) - click or drag to delete whole strokes and annotations; "
+                       L"Ctrl+Z undoes";
                 break;
             case TextTool:
                 hint = L"Text (T) - click anywhere and type";
@@ -1743,37 +1775,44 @@ bool enabled(int id)
 {
     if (id == RecentSnips || recentPanelCommand(id))
     {
-        if (app.recent.empty() || app.capturePending || app.overlay) return false;
-        if (id == RecentNewer) return app.recentScroll > 0;
-        if (id == RecentOlder) return app.recentScroll + recentVisibleRows() <
-            (static_cast<int>(app.recent.size()) + 1) / 2;
+        if (app.recent.empty() || app.capturePending || app.overlay)
+            return false;
+        if (id == RecentNewer)
+            return app.recentScroll > 0;
+        if (id == RecentOlder)
+            return app.recentScroll + recentVisibleRows() <
+                   (static_cast<int>(app.recent.size()) + 1) / 2;
         return id == RecentSnips || app.recentOpen;
     }
     if (curvedArrowCommand(id))
-        return hasImage() && curvedArrowSelected() && app.tool == Tool::Select &&
-               !app.erasing && !app.cropping && !app.pickingColor &&
-               length(app.document.items[app.document.selected].b - app.document.items[app.document.selected].a) >= .01f;
+        return hasImage() && curvedArrowSelected() && app.tool == Tool::Select && !app.erasing &&
+               !app.cropping && !app.pickingColor &&
+               length(app.document.items[app.document.selected].b -
+                      app.document.items[app.document.selected].a) >= .01f;
     if (id == Undo || id == Redo)
         return hasImage() && (id == Undo ? app.document.canUndo() : app.document.canRedo());
     if (id == NewSnip || id == InstantSnip)
         return !app.capturePending && !app.overlay;
-    if (id == Copy || id == Save || id == SaveAs || id == Fit || id == Actual || id == Eyedropper || id == CropTool ||
-        id == TextTool || id == HighlightTool || id == EraserTool || id == RectangleTool || id == TextBold || id == TextBox || id == TextSizeMenu ||
+    if (id == Copy || id == Save || id == SaveAs || id == Fit || id == Actual || id == Eyedropper ||
+        id == CropTool || id == TextTool || id == HighlightTool || id == EraserTool ||
+        id == RectangleTool || id == TextBold || id == TextBox || id == TextSizeMenu ||
         (id >= SelectTool && id <= LineTool) || (id >= CircleStyleMenu && id <= LineStyleMenu))
         return hasImage();
     return true;
 }
 bool active(int id)
 {
-    if (id == RecentSnips) return app.recentOpen;
+    if (id == RecentSnips)
+        return app.recentOpen;
     if (id == EraserTool)
         return app.erasing;
-    if (app.erasing && (id == TextTool || id == HighlightTool || (id >= SelectTool && id <= LineTool)))
+    if (app.erasing &&
+        (id == TextTool || id == HighlightTool || (id >= SelectTool && id <= LineTool)))
         return false;
     if (id == CropTool)
         return app.cropping;
-    if (app.cropping && (id == HighlightTool || id == TextTool ||
-        (id >= SelectTool && id <= LineTool)))
+    if (app.cropping &&
+        (id == HighlightTool || id == TextTool || (id >= SelectTool && id <= LineTool)))
         return false;
     if (id == HighlightTool)
         return app.tool == Tool::Highlight;
@@ -1783,9 +1822,11 @@ bool active(int id)
         return app.tool == Tool::Circle || app.tool == Tool::Rectangle;
     if (id == TextBold || id == TextBox)
     {
-        const bool current = selected() && app.document.items[app.document.selected].kind == Tool::Text;
-        return id == TextBold ? (current ? app.document.items[app.document.selected].bold : app.textBold)
-                              : (current ? app.document.items[app.document.selected].boxed : app.textBox);
+        const bool current =
+            selected() && app.document.items[app.document.selected].kind == Tool::Text;
+        return id == TextBold
+                   ? (current ? app.document.items[app.document.selected].bold : app.textBold)
+                   : (current ? app.document.items[app.document.selected].boxed : app.textBox);
     }
     if (id == Eyedropper)
         return app.pickingColor;
@@ -1824,13 +1865,12 @@ void ensureTarget()
     app.displayBitmap.reset();
     resetRecentDisplays();
     app.graphics.initialize();
-    auto properties = D2D1::RenderTargetProperties(app.softwareRendering
-        ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT);
+    auto properties = D2D1::RenderTargetProperties(
+        app.softwareRendering ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT);
     properties.dpiX = properties.dpiY = app.dpi * 96;
     check(app.graphics.factory->CreateHwndRenderTarget(
               properties,
-              D2D1::HwndRenderTargetProperties(
-                  app.window, size, D2D1_PRESENT_OPTIONS_IMMEDIATELY),
+              D2D1::HwndRenderTargetProperties(app.window, size, D2D1_PRESENT_OPTIONS_IMMEDIATELY),
               app.target.put()),
           "Cannot initialize the editor renderer.");
 }
@@ -1851,9 +1891,11 @@ Com<ID2D1BitmapBrush> createWorkspaceBrush(ID2D1RenderTarget *rt)
     Com<ID2D1Bitmap> bitmap;
     check(tile->GetBitmap(bitmap.put()), "Cannot read workspace pattern.");
     Com<ID2D1BitmapBrush> brush;
-    check(rt->CreateBitmapBrush(bitmap.get(),
-        D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP), brush.put()),
-        "Cannot paint workspace pattern.");
+    check(rt->CreateBitmapBrush(
+              bitmap.get(),
+              D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP),
+              brush.put()),
+          "Cannot paint workspace pattern.");
     return brush;
 }
 bool setSoftwareRendering(bool software)
@@ -1881,8 +1923,8 @@ bool setSoftwareRendering(bool software)
         }
     }
     app.rendererSpecified = false; // An explicit UI choice takes precedence over launch overrides.
-    const bool saved = WritePrivateProfileStringW(L"Settings", L"SoftwareRendering",
-        software ? L"1" : L"0", app.iniPath.c_str()) != FALSE;
+    app.rendererPreferencesDirty = true;
+    const bool saved = saveToolPreferences();
     status(software ? L"Software rendering enabled" : L"Hardware acceleration enabled");
     UpdateWindow(app.window);
     return saved;
@@ -1894,21 +1936,24 @@ void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR con
     dialog.cbSize = sizeof(dialog);
     dialog.hwndParent = app.window;
     dialog.hInstance = app.instance;
-    dialog.dwFlags = static_cast<TASKDIALOG_FLAGS>(TDF_ALLOW_DIALOG_CANCELLATION |
-        TDF_POSITION_RELATIVE_TO_WINDOW | (app.softwareRendering ? TDF_VERIFICATION_FLAG_CHECKED : 0) |
+    dialog.dwFlags = static_cast<TASKDIALOG_FLAGS>(
+        TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW |
+        (app.softwareRendering ? TDF_VERIFICATION_FLAG_CHECKED : 0) |
         (callback ? TDF_CALLBACK_TIMER : 0));
     dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    dialog.pszWindowTitle = L"Rendering - Snipper";
-    dialog.pszMainInstruction = L"Choose how Snipper draws its window";
+    dialog.pszWindowTitle = L"Rendering - Tiger Snip";
+    dialog.pszMainInstruction = L"Choose how Tiger Snip draws its window";
     dialog.pszContent =
-        L"Enable software rendering if Snipper freezes, shows stale content, or takes seconds to "
+        L"Enable software rendering if Tiger Snip freezes, shows stale content, or takes seconds "
+        L"to "
         L"redraw when you resize or maximize the window.\n\n"
         L"Off: hardware acceleration (recommended for most PCs).\n"
         L"On: software rendering, which can help with graphics-driver issues but may use more CPU "
         L"on large displays.\n\n"
-        L"Changes apply immediately and are remembered. Copied and saved image quality is unchanged.";
+        L"Changes apply immediately and are remembered. Copied and saved image quality is "
+        L"unchanged.";
     dialog.pszVerificationText = L"Use software rendering (compatibility mode)";
-    dialog.pszFooter = L"This setting affects Snipper only.";
+    dialog.pszFooter = L"This setting affects Tiger Snip only.";
     dialog.cButtons = 1;
     dialog.pButtons = buttons;
     dialog.nDefaultButton = IDOK;
@@ -1917,10 +1962,12 @@ void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR con
     dialog.lpCallbackData = context;
     int choice = IDCANCEL;
     BOOL software = app.softwareRendering;
-    check(TaskDialogIndirect(&dialog, &choice, nullptr, &software), "Cannot open rendering settings.");
+    check(TaskDialogIndirect(&dialog, &choice, nullptr, &software),
+          "Cannot open rendering settings.");
     if (choice == IDOK && !setSoftwareRendering(software != FALSE))
-        error(app.window, "Rendering changed for this session, but the preference could not be saved. "
-              "Keep Snipper in a writable folder to remember this setting.");
+        error(app.window,
+              "Rendering changed for this session, but the preference could not be saved. "
+              "Check that your personal Tiger Snip settings folder is writable.");
 }
 void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Point origin,
                 Color foreground)
@@ -2078,8 +2125,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
     auto &workspaceBrush = alternate ? alternateWorkspaceBrush : app.workspaceBrush;
     float dpiX = 0, dpiY = 0;
     rt->GetDpi(&dpiX, &dpiY);
-    if (!workspaceBrush || (!alternate &&
-        (app.workspaceBrushDpiX != dpiX || app.workspaceBrushDpiY != dpiY)))
+    if (!workspaceBrush ||
+        (!alternate && (app.workspaceBrushDpiX != dpiX || app.workspaceBrushDpiY != dpiY)))
     {
         workspaceBrush = createWorkspaceBrush(rt);
         if (!alternate)
@@ -2172,11 +2219,14 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         const float formattingLeft = layout.formatting.left;
         divider(formattingLeft - 10, formatTop + 11, formatTop + 31);
         if (app.erasing)
-            text(L"Whole object", {formattingLeft, formatTop + 5, formattingLeft + 160, formatTop + 37},
-                 Muted, app.graphics.smallFont.get(), true);
+            text(L"Whole object",
+                 {formattingLeft, formatTop + 5, formattingLeft + 160, formatTop + 37}, Muted,
+                 app.graphics.smallFont.get(), true);
         else
         {
-            text(textMode() ? L"Size" : highlightMode() ? L"Width" : L"Stroke",
+            text(textMode()        ? L"Size"
+                 : highlightMode() ? L"Width"
+                                   : L"Stroke",
                  {formattingLeft, formatTop + 5, formattingLeft + 45, formatTop + 37}, Muted,
                  app.graphics.smallFont.get());
             rounded({formattingLeft + 52, formatTop + 7, formattingLeft + 160, formatTop + 35},
@@ -2289,7 +2339,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                             ? app.geometryTool
                             : static_cast<Tool>(button.command - SelectTool);
             icon.color = button.command == CheckTool && available
-                             ? app.colors[static_cast<size_t>(Tool::Check)] : fg;
+                             ? app.colors[static_cast<size_t>(Tool::Check)]
+                             : fg;
             icon.thickness = 1.7f;
             icon.style = app.styles[static_cast<size_t>(icon.kind)];
             icon.a = {r.left + 9, r.top + 10};
@@ -2305,7 +2356,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         }
         else if (button.command == NewSnip || button.command == Copy || button.command == Save ||
                  button.command == SelectTool || button.command == PenTool ||
-                 button.command == TextTool || button.command == HighlightTool || button.command == EraserTool)
+                 button.command == TextTool || button.command == HighlightTool ||
+                 button.command == EraserTool)
         {
             float inset = button.command == NewSnip ? 12 : 9;
             if (copied)
@@ -2323,7 +2375,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         else if (button.command == RecentSnips)
         {
             drawUIIcon(rt, brush.get(), RecentSnips, {r.left + 8, (r.top + r.bottom) / 2 - 10}, fg);
-            text(L"Recent", {r.left + 32, r.top, r.right - 26, r.bottom}, fg, app.graphics.smallFont.get());
+            text(L"Recent", {r.left + 32, r.top, r.right - 26, r.bottom}, fg,
+                 app.graphics.smallFont.get());
             rounded({r.right - 23, r.top + 7, r.right - 5, r.bottom - 7}, rgb(255, 255, 255), 4);
             text(std::to_wstring(app.recent.size()), {r.right - 23, r.top, r.right - 5, r.bottom},
                  available ? Accent : Muted, app.graphics.smallFont.get(), true);
@@ -2402,8 +2455,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
             const auto a = app.view.toScreen({crop.left, crop.top});
             const auto b = app.view.toScreen({crop.right, crop.bottom});
             const auto top = app.view.toScreen({0, 0});
-            const auto bottom = app.view.toScreen({static_cast<float>(app.image.width),
-                                                    static_cast<float>(app.image.height)});
+            const auto bottom = app.view.toScreen(
+                {static_cast<float>(app.image.width), static_cast<float>(app.image.height)});
             brush->SetColor(color(rgb(0, 0, 0), .48f));
             rt->FillRectangle({top.x, top.y, bottom.x, a.y}, brush.get());
             rt->FillRectangle({top.x, b.y, bottom.x, bottom.y}, brush.get());
@@ -2416,7 +2469,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         }
         if (selected() && !app.textEdit && app.drag != Drag::Draw && !app.cropping)
         {
-        const auto &item = app.document.items[app.document.selected];
+            const auto &item = app.document.items[app.document.selected];
             auto box = item.bounds();
             auto a = app.view.toScreen({box.left, box.top}),
                  b = app.view.toScreen({box.right, box.bottom});
@@ -2474,7 +2527,10 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         const bool over = app.hover == button.command, available = enabled(button.command);
         const bool down = app.pressed == static_cast<int>(index + 1) && over;
         rounded({r.left, r.top + 2, r.right, r.bottom + 2}, rgb(215, 211, 230), 7);
-        panel(r, down ? rgb(219, 211, 248) : over && available ? rgb(233, 226, 255) : rgb(255, 255, 255),
+        panel(r,
+              down                ? rgb(219, 211, 248)
+              : over && available ? rgb(233, 226, 255)
+                                  : rgb(255, 255, 255),
               rgb(199, 190, 227));
         text(button.label, r, available ? Accent : Muted, app.graphics.smallFont.get(), true);
     }
@@ -2492,13 +2548,16 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                 L"Line: drag to draw; Shift snaps angle; drag endpoints to resize",
                 L"Rectangle: drag to draw; Shift makes a square",
                 L"Text: click and type; Ctrl+Enter finishes; double-click to edit",
-                L"Highlight: drag with the chisel brush; change color or width below; Ctrl+Z undoes"};
-            message = app.cropping ? L"Crop: drag the area to keep; release to crop; Esc cancels; Ctrl+Z restores"
-                      : app.pickingColor ? L"Eyedropper: click the image to pick a color; Esc cancels"
-                      : app.erasing ? L"Eraser: click or drag to delete whole annotations; Ctrl+Z undoes"
-                      : app.textEdit ? L"Text: Ctrl+Enter finishes; Enter adds a line; Esc cancels"
-                      : curvedArrowSelected() ? L"Curved arrow: Flip changes the bend; Ctrl+Z undoes"
-                                     : hints[static_cast<int>(app.tool)];
+                (L"Highlight: drag with the chisel brush; change color or width below; Ctrl+Z "
+                 L"undoes")};
+            message =
+                app.cropping
+                    ? L"Crop: drag the area to keep; release to crop; Esc cancels; Ctrl+Z restores"
+                : app.pickingColor ? L"Eyedropper: click the image to pick a color; Esc cancels"
+                : app.erasing  ? L"Eraser: click or drag to delete whole annotations; Ctrl+Z undoes"
+                : app.textEdit ? L"Text: Ctrl+Enter finishes; Enter adds a line; Esc cancels"
+                : curvedArrowSelected() ? L"Curved arrow: Flip changes the bend; Ctrl+Z undoes"
+                                        : hints[static_cast<int>(app.tool)];
         }
         else
             message = L"Ready when you are";
@@ -2523,21 +2582,29 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         panel(r, rgb(255, 255, 255), rgb(224, 222, 236));
         text(L"Recent snips", {r.left + 16, r.top + 10, r.right - 120, r.top + 38}, Ink,
              app.graphics.font.get());
-        text(std::to_wstring(app.recent.size()) + L" of 10", {r.right - 116, r.top + 10, r.right - 48, r.top + 38},
-             Muted, app.graphics.smallFont.get(), true);
-        text(L"Kept until Snipper exits", {r.left + 16, r.bottom - 28, r.right - 150, r.bottom - 6},
-             Muted, app.graphics.smallFont.get());
+        text(std::to_wstring(app.recent.size()) + L" of 10",
+             {r.right - 116, r.top + 10, r.right - 48, r.top + 38}, Muted,
+             app.graphics.smallFont.get(), true);
+        text(L"Kept until Tiger Snip exits",
+             {r.left + 16, r.bottom - 28, r.right - 150, r.bottom - 6}, Muted,
+             app.graphics.smallFont.get());
         for (size_t slot = 0; slot < app.buttons.size(); ++slot)
         {
             const auto &button = app.buttons[slot];
-            if (!recentPanelCommand(button.command)) continue;
+            if (!recentPanelCommand(button.command))
+                continue;
             const auto cell = button.rect;
             const bool over = app.hover == button.command, available = enabled(button.command);
             const bool down = app.pressed == static_cast<int>(slot + 1) && over;
             if (!recentChoice(button.command))
             {
-                rounded(cell, down ? rgb(219, 211, 248) : over && available ? rgb(242, 238, 255) : rgb(249, 249, 252), 7);
-                text(button.label, cell, available ? Ink : Muted, app.graphics.smallFont.get(), true);
+                rounded(cell,
+                        down                ? rgb(219, 211, 248)
+                        : over && available ? rgb(242, 238, 255)
+                                            : rgb(249, 249, 252),
+                        7);
+                text(button.label, cell, available ? Ink : Muted, app.graphics.smallFont.get(),
+                     true);
                 continue;
             }
             const int index = button.command - RecentChoiceFirst;
@@ -2557,23 +2624,33 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                     auto pixels = snip.thumbnail.pixels;
                     for (size_t i = 0; i < pixels.size(); i += 4)
                         for (int c = 0; c < 3; ++c)
-                            pixels[i + c] = static_cast<uint8_t>((pixels[i + c] * pixels[i + 3] + 127) / 255);
-                    check(rt->CreateBitmap(D2D1::SizeU(snip.thumbnail.width, snip.thumbnail.height), pixels.data(),
-                        snip.thumbnail.width * 4, D2D1::BitmapProperties(
-                            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96),
-                        display.put()), "Cannot display a recent snip thumbnail.");
+                            pixels[i + c] =
+                                static_cast<uint8_t>((pixels[i + c] * pixels[i + 3] + 127) / 255);
+                    check(rt->CreateBitmap(D2D1::SizeU(snip.thumbnail.width, snip.thumbnail.height),
+                                           pixels.data(), snip.thumbnail.width * 4,
+                                           D2D1::BitmapProperties(
+                                               D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+                                                                 D2D1_ALPHA_MODE_PREMULTIPLIED),
+                                               96, 96),
+                                           display.put()),
+                          "Cannot display a recent snip thumbnail.");
                 }
-                const float scale = std::min(art.width() / snip.thumbnail.width, art.height() / snip.thumbnail.height);
-                const float width = snip.thumbnail.width * scale, height = snip.thumbnail.height * scale;
-                const float left = art.left + (art.width() - width) / 2, top = art.top + (art.height() - height) / 2;
-                rt->DrawBitmap(display.get(), {left, top, left + width, top + height}, 1, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                const float scale = std::min(art.width() / snip.thumbnail.width,
+                                             art.height() / snip.thumbnail.height);
+                const float width = snip.thumbnail.width * scale,
+                            height = snip.thumbnail.height * scale;
+                const float left = art.left + (art.width() - width) / 2,
+                            top = art.top + (art.height() - height) / 2;
+                rt->DrawBitmap(display.get(), {left, top, left + width, top + height}, 1,
+                               D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
             }
             text(L"Snip " + std::to_wstring(snip.sequence),
-                {cell.left + 8, cell.top + 80, cell.right - 60, cell.bottom}, current ? Accent : Ink,
-                app.graphics.smallFont.get());
+                 {cell.left + 8, cell.top + 80, cell.right - 60, cell.bottom},
+                 current ? Accent : Ink, app.graphics.smallFont.get());
             wchar_t time[16]{};
             swprintf_s(time, L"%02u:%02u", snip.captured.wHour, snip.captured.wMinute);
-            text(current ? L"Current" : time, {cell.right - 60, cell.top + 80, cell.right - 6, cell.bottom},
+            text(current ? L"Current" : time,
+                 {cell.right - 60, cell.top + 80, cell.right - 6, cell.bottom},
                  current ? Accent : Muted, app.graphics.smallFont.get(), true);
         }
     }
@@ -2628,40 +2705,51 @@ Bitmap renderEditorPreview()
           "Cannot read editor preview.");
     return result;
 }
-LRESULT CALLBACK textEditProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
-                                  UINT_PTR, DWORD_PTR)
+LRESULT CALLBACK textEditProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp, UINT_PTR,
+                                   DWORD_PTR)
 {
-    try
-    {
-        if (message == WM_CHAR && wp == 2)
-            return 0; // Ctrl+B formats text; its translated control character is not content.
-        if (message == WM_KEYDOWN)
-        {
-            if (wp == VK_F11)
+    return callbackBoundary<LRESULT>(
+        [&]() -> LRESULT {
+#ifdef TIGER_SNIP_TESTING
+            if (testing::callbackCheckpoint)
+                testing::callbackCheckpoint("textEditProcedure", message);
+#endif
+            try
             {
-                command(FullScreen);
+                if (message == WM_CHAR && wp == 2)
+                    return 0; // Ctrl+B formats text; its translated control character is not
+                              // content.
+                if (message == WM_KEYDOWN)
+                {
+                    if (wp == VK_F11)
+                    {
+                        command(FullScreen);
+                        return 0;
+                    }
+                    const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                    if (wp == VK_ESCAPE || (wp == VK_RETURN && ctrl))
+                    {
+                        finishTextEditing(wp == VK_ESCAPE);
+                        return 0;
+                    }
+                    if (ctrl && (wp == 'B' || wp == 'S' || wp == 'N'))
+                    {
+                        command(wp == 'B'                          ? TextBold
+                                : wp == 'N'                        ? NewSnip
+                                : (GetKeyState(VK_SHIFT) & 0x8000) ? SaveAs
+                                                                   : Save);
+                        return 0;
+                    }
+                }
+                return DefSubclassProc(hwnd, message, wp, lp);
+            }
+            catch (const std::exception &exception)
+            {
+                error(app.window, exception.what());
                 return 0;
             }
-            const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (wp == VK_ESCAPE || (wp == VK_RETURN && ctrl))
-            {
-                finishTextEditing(wp == VK_ESCAPE);
-                return 0;
-            }
-            if (ctrl && (wp == 'B' || wp == 'S' || wp == 'N'))
-            {
-                command(wp == 'B' ? TextBold : wp == 'N' ? NewSnip :
-                    (GetKeyState(VK_SHIFT) & 0x8000) ? SaveAs : Save);
-                return 0;
-            }
-        }
-        return DefSubclassProc(hwnd, message, wp, lp);
-    }
-    catch (const std::exception &exception)
-    {
-        error(app.window, exception.what());
-        return 0;
-    }
+        },
+        [&](const char *failure) { error(app.window, failure); }, 0);
 }
 void syncTextEditor()
 {
@@ -2680,10 +2768,11 @@ void syncTextEditor()
     const int x = static_cast<int>(origin.x * app.dpi), y = static_cast<int>(origin.y * app.dpi);
     const int availableWidth = std::max(1, static_cast<int>((canvas.right - origin.x) * app.dpi));
     const int availableHeight = std::max(1, static_cast<int>((canvas.bottom - origin.y) * app.dpi));
-    HFONT font = CreateFontW(-std::max(1, static_cast<int>(std::round(item.fontSize * scale))),
-        0, 0, 0, item.bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
-        app.graphics.annotationFontFamily.c_str());
+    HFONT font =
+        CreateFontW(-std::max(1, static_cast<int>(std::round(item.fontSize * scale))), 0, 0, 0,
+                    item.bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                    app.graphics.annotationFontFamily.c_str());
     if (font)
     {
         SendMessageW(app.textEdit, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
@@ -2700,10 +2789,16 @@ void syncTextEditor()
               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
     SelectObject(measureDC, previousFont);
     ReleaseDC(app.textEdit, measureDC);
-    const int contentWidth = static_cast<int>(std::ceil((item.b.x - item.a.x - padding * 2) * scale));
-    const int width = std::min(availableWidth, std::max(24, std::max(contentWidth, int(measured.right)) + 4));
-    const int height = std::min(availableHeight, std::max(24, std::max(int(measured.bottom),
-        static_cast<int>(std::ceil((item.b.y - item.a.y - padding * 2) * scale))) + 4));
+    const int contentWidth =
+        static_cast<int>(std::ceil((item.b.x - item.a.x - padding * 2) * scale));
+    const int width =
+        std::min(availableWidth, std::max(24, std::max(contentWidth, int(measured.right)) + 4));
+    const int height = std::min(
+        availableHeight,
+        std::max(
+            24, std::max(int(measured.bottom),
+                         static_cast<int>(std::ceil((item.b.y - item.a.y - padding * 2) * scale))) +
+                    4));
 
     // Paint the actual screenshot beneath the EDIT control. A pattern brush restores
     // those pixels on deletion/selection, unlike a hollow brush which leaves text trails.
@@ -2793,7 +2888,8 @@ void finishTextEditing(bool cancel, bool selectAfter)
     if (selected())
     {
         const auto &item = app.document.items[index];
-        const bool unchanged = !app.textNew && item.text == app.textBefore.text &&
+        const bool unchanged =
+            !app.textNew && item.text == app.textBefore.text &&
             item.color == app.textBefore.color && item.fontSize == app.textBefore.fontSize &&
             item.bold == app.textBefore.bold && item.boxed == app.textBefore.boxed;
         if (cancel || (app.textNew && item.text.empty()) || unchanged)
@@ -2833,8 +2929,8 @@ void beginTextEditing(Point point, int existing)
         item.fontSize = app.fontSize;
         item.bold = app.textBold;
         item.boxed = app.textBox;
-        item.textWidth = std::max(1.0f, std::min(600.0f, app.image.width - point.x -
-                                              (item.boxed ? 24 : 0)));
+        item.textWidth =
+            std::max(1.0f, std::min(600.0f, app.image.width - point.x - (item.boxed ? 24 : 0)));
         app.graphics.measureText(item);
         app.document.items.push_back(std::move(item));
         existing = static_cast<int>(app.document.items.size()) - 1;
@@ -2842,15 +2938,15 @@ void beginTextEditing(Point point, int existing)
     app.document.selected = existing;
     app.textBefore = app.document.items[existing];
     app.tool = Tool::Text;
-    app.textEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE |
-        ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 1, 1, app.window,
-        reinterpret_cast<HMENU>(TextEditControl), app.instance, nullptr);
+    app.textEdit = CreateWindowExW(
+        0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0,
+        0, 1, 1, app.window, reinterpret_cast<HMENU>(TextEditControl), app.instance, nullptr);
     if (!app.textEdit || !SetWindowSubclass(app.textEdit, textEditProcedure, 1, 0))
     {
         if (app.textEdit)
             DestroyWindow(std::exchange(app.textEdit, nullptr));
         app.document.cancel();
-        throw std::runtime_error("Cannot open the inline text editor.");
+        throwWindowsError("Cannot open the inline text editor.");
     }
     SendMessageW(app.textEdit, EM_SETLIMITTEXT, 16384, 0);
     SetWindowTextW(app.textEdit, app.textBefore.text.c_str());
@@ -2903,8 +2999,8 @@ void changeColor(Color value)
     if (app.tool == Tool::Select && !selected())
         selectTool(Tool::Pen);
     // Recoloring a selected shape updates that shape tool's preference, even in Select mode.
-    const size_t toolIndex = static_cast<size_t>(selected()
-        ? app.document.items[app.document.selected].kind : app.tool);
+    const size_t toolIndex =
+        static_cast<size_t>(selected() ? app.document.items[app.document.selected].kind : app.tool);
     if (app.colors[toolIndex] != value)
     {
         app.colors[toolIndex] = value;
@@ -2942,7 +3038,7 @@ void addPaletteColor(Color value)
 {
     if (std::find(app.palette.begin(), app.palette.end(), value) == app.palette.end())
     {
-        if (app.palette.size() >= 60000U - ColorFirst)
+        if (app.palette.size() >= MaxPaletteColors)
             throw std::runtime_error("The palette is full. Delete a color before adding another.");
         app.palette.push_back(value);
         paletteChanged();
@@ -2980,7 +3076,8 @@ void paletteMenu(POINT point)
     POINT client = point;
     ScreenToClient(app.window, &client);
     const auto button = std::find_if(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
-        return paletteCommand(b.command) && b.rect.contains({client.x / app.dpi, client.y / app.dpi});
+        return paletteCommand(b.command) &&
+               b.rect.contains({client.x / app.dpi, client.y / app.dpi});
     });
     if (button == app.buttons.end())
         return;
@@ -2988,8 +3085,8 @@ void paletteMenu(POINT point)
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, 1, L"Edit color...");
     AppendMenuW(menu, MF_STRING, 2, L"Delete color");
-    const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                                     point.x, point.y, 0, app.window, nullptr);
+    const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
+                                      app.window, nullptr);
     DestroyMenu(menu);
     if (choice == 1)
     {
@@ -2998,16 +3095,18 @@ void paletteMenu(POINT point)
     }
     else if (choice == 2)
         deletePaletteColor(index);
-    if (app.textEdit) SetFocus(app.textEdit);
+    if (app.textEdit)
+        SetFocus(app.textEdit);
 }
 void changeThickness(int delta)
 {
     if (textMode())
     {
-        const bool current = selected() && app.document.items[app.document.selected].kind == Tool::Text;
+        const bool current =
+            selected() && app.document.items[app.document.selected].kind == Tool::Text;
         const auto *item = current ? &app.document.items[app.document.selected] : nullptr;
         changeTextFormatting((item ? item->fontSize : app.fontSize) + delta,
-            item ? item->bold : app.textBold, item ? item->boxed : app.textBox);
+                             item ? item->bold : app.textBold, item ? item->boxed : app.textBox);
         return;
     }
     float previous = selected() && app.document.items[app.document.selected].kind != Tool::Check
@@ -3049,7 +3148,11 @@ void repeatSize()
         stopSizeRepeat();
         return;
     }
-    SetTimer(app.window, SizeRepeatTimer, SizeRepeatInterval, nullptr);
+    if (!SetTimer(app.window, SizeRepeatTimer, SizeRepeatInterval, nullptr))
+    {
+        stopSizeRepeat();
+        return;
+    }
     const size_t index = static_cast<size_t>(app.pressed - 1);
     if (index >= app.buttons.size() || app.buttons[index].command != app.sizeRepeatCommand ||
         app.hover != app.sizeRepeatCommand || !enabled(app.sizeRepeatCommand))
@@ -3077,20 +3180,27 @@ void eraseBetween(Point from, Point to)
     // Clip the sweep to the visible screenshot, never to toolbar or padding pixels.
     auto r = canvasRect();
     const auto a = app.view.toScreen({0, 0});
-    const auto b = app.view.toScreen({static_cast<float>(app.image.width), static_cast<float>(app.image.height)});
-    r = {std::max(r.left, a.x), std::max(r.top, a.y), std::min(r.right, b.x), std::min(r.bottom, b.y)};
-    if (r.width() <= 0 || r.height() <= 0) return;
+    const auto b = app.view.toScreen(
+        {static_cast<float>(app.image.width), static_cast<float>(app.image.height)});
+    r = {std::max(r.left, a.x), std::max(r.top, a.y), std::min(r.right, b.x),
+         std::min(r.bottom, b.y)};
+    if (r.width() <= 0 || r.height() <= 0)
+        return;
     const auto delta = to - from;
     float first = 0, last = 1;
     auto clip = [&](float p, float q) {
-        if (p == 0) return q >= 0;
+        if (p == 0)
+            return q >= 0;
         const float t = q / p;
-        if (p < 0) first = std::max(first, t);
-        else last = std::min(last, t);
+        if (p < 0)
+            first = std::max(first, t);
+        else
+            last = std::min(last, t);
         return first <= last;
     };
     if (!clip(-delta.x, from.x - r.left) || !clip(delta.x, r.right - from.x) ||
-        !clip(-delta.y, from.y - r.top) || !clip(delta.y, r.bottom - from.y)) return;
+        !clip(-delta.y, from.y - r.top) || !clip(delta.y, r.bottom - from.y))
+        return;
     if (app.document.eraseAlong(app.view.toImage(from + delta * first),
                                 app.view.toImage(from + delta * last), 6 / app.view.scale))
     {
@@ -3134,7 +3244,7 @@ void syncCroppedImage()
     {
         const auto r = *app.document.cropBounds;
         app.image = app.cropSource.crop(static_cast<int>(r.left), static_cast<int>(r.top),
-                                       static_cast<int>(r.width()), static_cast<int>(r.height()));
+                                        static_cast<int>(r.width()), static_cast<int>(r.height()));
     }
     else
         app.image = app.cropSource;
@@ -3156,8 +3266,8 @@ void applyCrop(Rect r)
     auto cropped = app.image.crop(left, top, right - left, bottom - top);
     app.document.begin();
     const auto previous = app.document.cropBounds.value_or(Rect{});
-    app.document.cropBounds = Rect{previous.left + left, previous.top + top,
-                                   previous.left + right, previous.top + bottom};
+    app.document.cropBounds = Rect{previous.left + left, previous.top + top, previous.left + right,
+                                   previous.top + bottom};
     for (auto &item : app.document.items)
         item.move({-static_cast<float>(left), -static_cast<float>(top)});
     app.document.selected = -1;
@@ -3188,7 +3298,8 @@ void mouseDown(LPARAM lp, bool middle = false)
                 for (size_t i = 0; i < app.buttons.size(); ++i)
                 {
                     const auto &button = app.buttons[i];
-                    if (recentPanelCommand(button.command) && button.rect.contains(screen) && enabled(button.command))
+                    if (recentPanelCommand(button.command) && button.rect.contains(screen) &&
+                        enabled(button.command))
                     {
                         app.pressed = static_cast<int>(i + 1);
                         app.hover = button.command;
@@ -3199,8 +3310,11 @@ void mouseDown(LPARAM lp, bool middle = false)
                 }
             return; // Panel padding never draws on the screenshot beneath it.
         }
-        const bool toggle = !middle && std::any_of(app.buttons.begin(), app.buttons.end(),
-            [&](const Button &button) { return button.command == RecentSnips && button.rect.contains(screen); });
+        const bool toggle =
+            !middle &&
+            std::any_of(app.buttons.begin(), app.buttons.end(), [&](const Button &button) {
+                return button.command == RecentSnips && button.rect.contains(screen);
+            });
         if (!toggle)
         {
             closeRecent();
@@ -3224,7 +3338,8 @@ void mouseDown(LPARAM lp, bool middle = false)
                     {
                         app.sizeRepeatCommand = button.command;
                         app.sizeRepeated = false;
-                        SetTimer(app.window, SizeRepeatTimer, SizeRepeatDelay, nullptr);
+                        if (!SetTimer(app.window, SizeRepeatTimer, SizeRepeatDelay, nullptr))
+                            app.sizeRepeatCommand = 0; // A single click remains available.
                     }
                     repaint();
                 }
@@ -3356,7 +3471,8 @@ void mouseMove(LPARAM lp)
         for (const auto &button : app.buttons)
             if (button.rect.contains(screen))
             {
-                if (app.recentOpen && recentPanelRect().contains(screen) && !recentPanelCommand(button.command))
+                if (app.recentOpen && recentPanelRect().contains(screen) &&
+                    !recentPanelCommand(button.command))
                     continue;
                 hover = button.command;
                 break;
@@ -3413,7 +3529,8 @@ void mouseMove(LPARAM lp)
             item.b =
                 limited(app.dragStart + Point{std::cos(angle), std::sin(angle)} * length(delta));
         }
-        else if ((app.tool == Tool::Circle || app.tool == Tool::Rectangle) && (GetKeyState(VK_SHIFT) & 0x8000))
+        else if ((app.tool == Tool::Circle || app.tool == Tool::Rectangle) &&
+                 (GetKeyState(VK_SHIFT) & 0x8000))
         {
             Point delta = p - app.dragStart;
             float side = std::min(std::abs(delta.x), std::abs(delta.y));
@@ -3444,7 +3561,8 @@ void mouseMove(LPARAM lp)
         {
             auto corners = handles(app.before);
             Point opposite = corners[(app.handle + 2) % 4];
-            if (item.kind == Tool::Check || item.kind == Tool::Text || (GetKeyState(VK_SHIFT) & 0x8000))
+            if (item.kind == Tool::Check || item.kind == Tool::Text ||
+                (GetKeyState(VK_SHIFT) & 0x8000))
             {
                 auto r = app.before.bounds();
                 Point delta = p - opposite;
@@ -3539,7 +3657,8 @@ void startCopyFeedback()
     if (!hasImage() || !IsWindowVisible(app.window))
         return;
     app.copyFlashStarted = GetTickCount64();
-    SetTimer(app.window, CopyFlashTimer, 16, nullptr);
+    if (!SetTimer(app.window, CopyFlashTimer, 16, nullptr))
+        app.copyFlashStarted = false; // Copy already succeeded; omit the optional animation.
     repaint();
 }
 void copyImage(bool automatic = false)
@@ -3548,9 +3667,15 @@ void copyImage(bool automatic = false)
         return;
     const auto &bitmap = previewImage();
     auto png = app.graphics.png(bitmap);
-    if (!copyBitmap(app.window, bitmap, png))
+    ClipboardFailure failure;
+    if (!copyBitmap(app.window, bitmap, png, &failure))
     {
-        status(L"Clipboard is busy. Try Ctrl+C again.");
+        if (failure.unavailable)
+            status(L"Clipboard is busy. Try Ctrl+C again.");
+        else if (automatic)
+            status(L"Could not auto copy. Press Ctrl+C to retry.");
+        else
+            error(app.window, windowsError(failure.operation, failure.code).c_str());
         return;
     }
     app.dirty = false;
@@ -3562,7 +3687,8 @@ void copyImage(bool automatic = false)
 }
 bool existingFolder(const std::wstring &path)
 {
-    const DWORD attributes = path.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(path.c_str());
+    const DWORD attributes =
+        path.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(path.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
 }
 std::wstring initialSavePath(const std::wstring &path)
@@ -3570,32 +3696,35 @@ std::wstring initialSavePath(const std::wstring &path)
     if (!existingFolder(app.saveFolder))
         return path;
     // A full filename makes the explicit preference win over the dialog's recent folder.
-    return (std::filesystem::path(app.saveFolder) / std::filesystem::path(path).filename()).wstring();
+    return (std::filesystem::path(app.saveFolder) / std::filesystem::path(path).filename())
+        .wstring();
 }
 void setSaveFolder(const std::wstring &folder)
 {
     if (!existingFolder(folder))
         throw std::runtime_error("Choose an existing folder for saved snips.");
-    if (!WritePrivateProfileStringW(L"Settings", L"SaveFolder", folder.c_str(), app.iniPath.c_str()))
-        throw std::runtime_error("The save location could not be remembered. Keep Snipper in a writable folder.");
+    commitPreferences(app.iniPath, {{L"Settings", L"SaveFolder", folder}});
     app.saveFolder = folder;
 }
 void chooseSaveFolder()
 {
     Com<IFileOpenDialog> dialog;
     check(CoCreateInstance(__uuidof(FileOpenDialog), nullptr, CLSCTX_INPROC_SERVER,
-        __uuidof(IFileOpenDialog), reinterpret_cast<void **>(dialog.put())), "Cannot open the folder picker.");
+                           __uuidof(IFileOpenDialog), reinterpret_cast<void **>(dialog.put())),
+          "Cannot open the folder picker.");
     DWORD options = 0;
     check(dialog->GetOptions(&options), "Cannot read folder picker options.");
     check(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
-        FOS_NOCHANGEDIR), "Cannot configure the folder picker.");
+                             FOS_NOCHANGEDIR),
+          "Cannot configure the folder picker.");
     check(dialog->SetTitle(L"Save location for snips"), "Cannot set the folder picker title.");
     check(dialog->SetOkButtonLabel(L"Use this folder"), "Cannot label the folder picker.");
     if (existingFolder(app.saveFolder))
     {
         Com<IShellItem> folder;
         if (SUCCEEDED(SHCreateItemFromParsingName(app.saveFolder.c_str(), nullptr,
-            __uuidof(IShellItem), reinterpret_cast<void **>(folder.put()))))
+                                                  __uuidof(IShellItem),
+                                                  reinterpret_cast<void **>(folder.put()))))
             check(dialog->SetFolder(folder.get()), "Cannot select the current save folder.");
     }
     const HRESULT result = dialog->Show(IsWindowVisible(app.window) ? app.window : nullptr);
@@ -3635,8 +3764,9 @@ bool chooseSave(std::wstring &path)
     dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetSaveFileNameW(&dialog))
     {
-        if (CommDlgExtendedError())
-            throw std::runtime_error("Windows could not open the save dialog.");
+        const DWORD failure = CommDlgExtendedError();
+        if (failure)
+            throwWindowsError("Windows could not open the save dialog.", failure);
         return false;
     }
     path = buffer;
@@ -3646,7 +3776,7 @@ bool chooseSave(std::wstring &path)
     else if (_wcsicmp(path.substr(dot).c_str(), L".png") != 0)
     {
         MessageBoxW(IsWindowVisible(app.window) ? app.window : nullptr,
-                    L"Snipper saves PNG images. Use a filename ending in .png.", L"Save as PNG",
+                    L"Tiger Snip saves PNG images. Use a filename ending in .png.", L"Save as PNG",
                     MB_OK | MB_ICONINFORMATION);
         return chooseSave(path);
     }
@@ -3697,7 +3827,7 @@ void openSettings()
                                          owner.top + (owner.bottom - owner.top - height) / 2, width,
                                          height, app.window, nullptr, app.instance, nullptr);
     if (!app.settingsWindow)
-        throw std::runtime_error("Cannot open shortcut settings.");
+        throwWindowsError("Cannot open shortcut settings.");
     EnableWindow(app.window, FALSE);
     ShowWindow(app.settingsWindow, SW_SHOW);
     SetFocus(app.hotkeyControl);
@@ -3709,10 +3839,11 @@ void trayMenu()
     AppendMenuW(menu, MF_STRING, InstantSnip, L"Capture all monitors now");
     AppendMenuW(menu, MF_STRING, ShowEditor, L"Open editor");
     AppendMenuW(menu, MF_STRING, Settings, L"Keyboard shortcuts...");
-    AppendMenuW(menu, MF_STRING | (app.autoCopy ? MF_CHECKED : 0), AutoCopy, L"Auto copy new snips");
+    AppendMenuW(menu, MF_STRING | (app.autoCopy ? MF_CHECKED : 0), AutoCopy,
+                L"Auto copy new snips");
     AppendMenuW(menu, MF_STRING, SaveLocation, L"Save location...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, Exit, L"Exit Snipper");
+    AppendMenuW(menu, MF_STRING, Exit, L"Exit Tiger Snip");
     POINT point{};
     GetCursorPos(&point);
     SetForegroundWindow(app.window);
@@ -3728,9 +3859,10 @@ void drawShapeChoice(const DRAWITEMSTRUCT &draw)
     const auto &choice = *reinterpret_cast<const ShapeChoice *>(draw.itemData);
     app.graphics.initialize();
     Com<ID2D1DCRenderTarget> target;
-    const auto properties = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
-            app.dpi * 96, app.dpi * 96);
+    const auto properties = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), app.dpi * 96,
+        app.dpi * 96);
     check(app.graphics.factory->CreateDCRenderTarget(&properties, target.put()),
           "Cannot draw shape choices.");
     check(target->BindDC(draw.hDC, &draw.rcItem), "Cannot bind shape menu drawing.");
@@ -3742,8 +3874,11 @@ void drawShapeChoice(const DRAWITEMSTRUCT &draw)
     const bool chosen = (draw.itemState & ODS_CHECKED) != 0;
     target->BeginDraw();
     target->Clear(color(rgb(255, 255, 255)));
-    brush->SetColor(color(hover ? rgb(233, 226, 255) : chosen ? rgb(246, 242, 255) : rgb(255, 255, 255)));
-    target->FillRoundedRectangle(D2D1::RoundedRect({3, 2, width - 3, height - 2}, 7, 7), brush.get());
+    brush->SetColor(color(hover    ? rgb(233, 226, 255)
+                          : chosen ? rgb(246, 242, 255)
+                                   : rgb(255, 255, 255)));
+    target->FillRoundedRectangle(D2D1::RoundedRect({3, 2, width - 3, height - 2}, 7, 7),
+                                 brush.get());
     Annotation icon;
     icon.kind = choice.tool;
     icon.style = choice.style;
@@ -3761,15 +3896,16 @@ void drawShapeChoice(const DRAWITEMSTRUCT &draw)
     }
     const auto bounds = icon.bounds();
     const float scale = std::min(40 / (bounds.width() + 5), 32 / (bounds.height() + 5));
-    target->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale) *
+    target->SetTransform(
+        D2D1::Matrix3x2F::Scale(scale, scale) *
         D2D1::Matrix3x2F::Translation(30 - (bounds.left + bounds.right) / 2 * scale,
-                                    height / 2 - (bounds.top + bounds.bottom) / 2 * scale));
+                                      height / 2 - (bounds.top + bounds.bottom) / 2 * scale));
     app.graphics.drawAnnotations(target.get(), {icon});
     target->SetTransform(D2D1::Matrix3x2F::Identity());
     brush->SetColor(color(chosen || hover ? Accent : Ink));
     app.graphics.font->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
     target->DrawText(choice.label, static_cast<UINT32>(wcslen(choice.label)),
-        app.graphics.font.get(), {62, 0, width - 10, height}, brush.get());
+                     app.graphics.font.get(), {62, 0, width - 10, height}, brush.get());
     check(target->EndDraw(), "Cannot finish shape menu drawing.");
 }
 void drawLogoChoice(const DRAWITEMSTRUCT &draw)
@@ -3828,20 +3964,26 @@ void showShapeChoices(int id)
 {
     std::vector<ShapeChoice> choices;
     if (id == CircleStyleMenu)
-        choices = {{Tool::Circle, 0, L"Circle"}, {Tool::Circle, 1, L"Highlight circle"},
-            {Tool::Circle, 2, L"Dashed circle"}, {Tool::Rectangle, 0, L"Square"},
-            {Tool::Rectangle, 1, L"Rounded square"}, {Tool::Rectangle, 2, L"Highlight box"},
-            {Tool::Rectangle, 3, L"Filled box"}};
+        choices = {{Tool::Circle, 0, L"Circle"},
+                   {Tool::Circle, 1, L"Highlight circle"},
+                   {Tool::Circle, 2, L"Dashed circle"},
+                   {Tool::Rectangle, 0, L"Square"},
+                   {Tool::Rectangle, 1, L"Rounded square"},
+                   {Tool::Rectangle, 2, L"Highlight box"},
+                   {Tool::Rectangle, 3, L"Filled box"}};
     else if (id == ArrowStyleMenu)
-        choices = {{Tool::Arrow, 0, L"Classic"}, {Tool::Arrow, 1, L"Outlined"},
-            {Tool::Arrow, 2, L"Curved gloss"}, {Tool::Arrow, 3, L"Straight gloss"},
-            {Tool::Arrow, 4, L"Block gloss"}};
+        choices = {{Tool::Arrow, 0, L"Classic"},
+                   {Tool::Arrow, 1, L"Outlined"},
+                   {Tool::Arrow, 2, L"Curved gloss"},
+                   {Tool::Arrow, 3, L"Straight gloss"},
+                   {Tool::Arrow, 4, L"Block gloss"}};
     else if (id == CheckStyleMenu)
-        choices = {{Tool::Check, 0, L"Boxed check"}, {Tool::Check, 1, L"Circle badge"},
-            {Tool::Check, 2, L"Simple check"}, {Tool::Check, 3, L"Boxed X"},
-            {Tool::Check, 4, L"Circle X badge"}, {Tool::Check, 5, L"Simple X"}};
+        choices = {{Tool::Check, 0, L"Boxed check"},    {Tool::Check, 1, L"Circle badge"},
+                   {Tool::Check, 2, L"Simple check"},   {Tool::Check, 3, L"Boxed X"},
+                   {Tool::Check, 4, L"Circle X badge"}, {Tool::Check, 5, L"Simple X"}};
     else
-        choices = {{Tool::Line, 0, L"Solid"}, {Tool::Line, 1, L"Dashed"}, {Tool::Line, 2, L"Dotted"}};
+        choices = {
+            {Tool::Line, 0, L"Solid"}, {Tool::Line, 1, L"Dashed"}, {Tool::Line, 2, L"Dotted"}};
     HMENU menu = CreatePopupMenu();
     if (!menu)
         return;
@@ -3849,20 +3991,20 @@ void showShapeChoices(int id)
     for (const auto &choice : choices)
     {
         const bool chosen = app.styles[static_cast<size_t>(choice.tool)] == choice.style &&
-            (id != CircleStyleMenu || app.geometryTool == choice.tool);
+                            (id != CircleStyleMenu || app.geometryTool == choice.tool);
         AppendMenuW(menu, MF_OWNERDRAW | (chosen ? MF_CHECKED : 0),
-            styleCommand(choice.tool, choice.style), reinterpret_cast<LPCWSTR>(&choice));
+                    styleCommand(choice.tool, choice.style), reinterpret_cast<LPCWSTR>(&choice));
     }
     POINT anchor{};
     const auto button = std::find_if(app.buttons.begin(), app.buttons.end(),
-        [&](const Button &b) { return b.command == id; });
+                                     [&](const Button &b) { return b.command == id; });
     if (button != app.buttons.end())
         anchor = {static_cast<LONG>((button->rect.left - 84) * app.dpi),
                   static_cast<LONG>((button->rect.bottom + 4) * app.dpi)};
     ClientToScreen(app.window, &anchor);
     SetForegroundWindow(app.window);
-    const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-        anchor.x, anchor.y, 0, app.window, nullptr);
+    const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, anchor.x, anchor.y, 0,
+                                      app.window, nullptr);
     app.shapeMenu = nullptr;
     DestroyMenu(menu);
     if (choice)
@@ -3870,7 +4012,8 @@ void showShapeChoices(int id)
 }
 void command(int id)
 {
-    if (id != RecentSnips && !recentPanelCommand(id)) closeRecent();
+    if (id != RecentSnips && !recentPanelCommand(id))
+        closeRecent();
     if (app.sizeRepeatCommand && id != app.sizeRepeatCommand)
     {
         stopSizeRepeat();
@@ -3895,20 +4038,24 @@ void command(int id)
     }
     if (recentChoice(id))
     {
-        if (enabled(id)) restoreRecentSnip(id - RecentChoiceFirst);
+        if (enabled(id))
+            restoreRecentSnip(id - RecentChoiceFirst);
         return;
     }
     if (id == RecentSnips)
     {
-        if (!enabled(id)) return;
-        if (app.recentOpen) closeRecent();
+        if (!enabled(id))
+            return;
+        if (app.recentOpen)
+            closeRecent();
         else
         {
             app.cropping = false;
             app.spaceDown = false;
             refreshRecentThumbnail();
             app.recentFocus = app.activeRecent >= 0
-                ? static_cast<int>(app.recent.size()) - 1 - app.activeRecent : 0;
+                                  ? static_cast<int>(app.recent.size()) - 1 - app.activeRecent
+                                  : 0;
             app.recentScroll = std::max(0, app.recentFocus / 2 - recentVisibleRows() + 1);
             app.recentOpen = true;
         }
@@ -3918,8 +4065,10 @@ void command(int id)
     }
     if (id == RecentClose || id == RecentNewer || id == RecentOlder)
     {
-        if (!enabled(id)) return;
-        if (id == RecentClose) closeRecent();
+        if (!enabled(id))
+            return;
+        if (id == RecentClose)
+            closeRecent();
         else
         {
             app.recentScroll += id == RecentOlder ? 1 : -1;
@@ -3963,7 +4112,8 @@ void command(int id)
     if (id >= StyleChoiceFirst && id < StyleChoiceFirst + 5 * StyleChoiceStride)
     {
         const int option = id - StyleChoiceFirst;
-        const Tool tool = static_cast<Tool>(static_cast<int>(Tool::Circle) + option / StyleChoiceStride);
+        const Tool tool =
+            static_cast<Tool>(static_cast<int>(Tool::Circle) + option / StyleChoiceStride);
         const size_t toolIndex = static_cast<size_t>(tool);
         const auto style = static_cast<uint8_t>(option % StyleChoiceStride);
         if (!hasImage() || style >= StyleCounts[toolIndex])
@@ -3985,8 +4135,8 @@ void command(int id)
     }
     if (id >= TextSizeFirst && id < TextSizeFirst + static_cast<int>(FontSizes.size()))
     {
-        changeTextFormatting(static_cast<float>(FontSizes[id - TextSizeFirst]),
-                             active(TextBold), active(TextBox));
+        changeTextFormatting(static_cast<float>(FontSizes[id - TextSizeFirst]), active(TextBold),
+                             active(TextBox));
         return;
     }
     switch (id)
@@ -4025,31 +4175,34 @@ void command(int id)
         break;
     case RectangleTool:
         if (hasImage())
-            command(styleCommand(Tool::Rectangle, app.styles[static_cast<size_t>(Tool::Rectangle)]));
+            command(
+                styleCommand(Tool::Rectangle, app.styles[static_cast<size_t>(Tool::Rectangle)]));
         break;
     case TextBold:
-    case TextBox:
-    {
-        const float size = selected() && app.document.items[app.document.selected].kind == Tool::Text
-            ? app.document.items[app.document.selected].fontSize : app.fontSize;
+    case TextBox: {
+        const float size =
+            selected() && app.document.items[app.document.selected].kind == Tool::Text
+                ? app.document.items[app.document.selected].fontSize
+                : app.fontSize;
         changeTextFormatting(size, id == TextBold ? !active(TextBold) : active(TextBold),
                              id == TextBox ? !active(TextBox) : active(TextBox));
         break;
     }
-    case TextSizeMenu:
-    {
+    case TextSizeMenu: {
         HMENU menu = CreatePopupMenu();
         if (!menu)
             break;
-        const float size = selected() && app.document.items[app.document.selected].kind == Tool::Text
-            ? app.document.items[app.document.selected].fontSize : app.fontSize;
+        const float size =
+            selected() && app.document.items[app.document.selected].kind == Tool::Text
+                ? app.document.items[app.document.selected].fontSize
+                : app.fontSize;
         for (size_t i = 0; i < FontSizes.size(); ++i)
             AppendMenuW(menu, MF_STRING | (FontSizes[i] == size ? MF_CHECKED : 0),
-                TextSizeFirst + i, (std::to_wstring(FontSizes[i]) + L" px").c_str());
+                        TextSizeFirst + i, (std::to_wstring(FontSizes[i]) + L" px").c_str());
         POINT point{};
         GetCursorPos(&point);
-        const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            point.x, point.y, 0, app.window, nullptr);
+        const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y,
+                                          0, app.window, nullptr);
         DestroyMenu(menu);
         if (choice)
             command(choice);
@@ -4064,11 +4217,10 @@ void command(int id)
         copyImage();
         break;
     case AutoCopy:
-        if (!WritePrivateProfileStringW(L"Settings", L"AutoCopy", app.autoCopy ? L"0" : L"1",
-                                        app.iniPath.c_str()))
-            throw std::runtime_error("Auto copy setting could not be saved. Keep Snipper in a writable folder.");
+        commitPreferences(app.iniPath, {{L"Settings", L"AutoCopy", app.autoCopy ? L"0" : L"1"}});
         app.autoCopy = !app.autoCopy;
-        status(app.autoCopy ? L"Auto copy enabled for new snips" : L"Auto copy disabled - use Copy or Ctrl+C");
+        status(app.autoCopy ? L"Auto copy enabled for new snips"
+                            : L"Auto copy disabled - use Copy or Ctrl+C");
         break;
     case Save:
         saveImage();
@@ -4139,8 +4291,7 @@ void command(int id)
         break;
     case ToggleActions:
     case ToggleTools:
-    case ToggleFormatting:
-    {
+    case ToggleFormatting: {
         app.collapsedRows ^= 1U << (id - ToggleActions);
         app.layoutPreferencesDirty = true;
 
@@ -4156,8 +4307,9 @@ void command(int id)
             const auto r = navigationRect();
             app.fit = false;
             app.view.scale = 1 / app.dpi;
-            app.view.origin = Point{(r.left + r.right) / 2, (r.top + r.bottom) / 2} -
-                              Point{app.image.width / 2.0f, app.image.height / 2.0f} * app.view.scale;
+            app.view.origin =
+                Point{(r.left + r.right) / 2, (r.top + r.bottom) / 2} -
+                Point{app.image.width / 2.0f, app.image.height / 2.0f} * app.view.scale;
             updateView();
             repaint();
         }
@@ -4176,7 +4328,8 @@ void command(int id)
             }
             else
             {
-                app.pickerImage = app.graphics.exportImage(app.image, app.document.items, app.exportOptions);
+                app.pickerImage =
+                    app.graphics.exportImage(app.image, app.document.items, app.exportOptions);
                 app.pickingColor = true;
             }
             app.status.clear();
@@ -4235,16 +4388,19 @@ void command(int id)
         showEditor();
         break;
     case About:
-        MessageBoxW(
-            app.window,
-            L"Snipper 1.0.1\n\nNative C++ screenshot editor.\nDeveloped by Jack Kempf\n\nCtrl+N: new snip\nCtrl+C: "
-            L"copy image with annotations\nCtrl+S: save PNG\nCtrl+Shift+S: Save As\nCtrl+Z "
-            L"/ Ctrl+Y: undo / redo\nV / P / H / T / O / A / K / L: select / pen / highlight / text / circle / arrow / "
-            L"check / line\n[ / ]: brush size\nDelete: remove selection\nMouse wheel: "
-            L"zoom from Fit to 800%\nSelect + drag image: pan (also middle-drag or Space+drag)\nEsc: cancel capture or current "
-            L"edit\n\nClose the window to stay in the tray.\nFile > Exit quits "
-            L"completely.\n\nShortcut settings are saved beside the executable.",
-            L"About Snipper", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(app.window,
+                    L"Tiger Snip 1.0.2\n\nNative C++ screenshot editor.\nDeveloped by Jack "
+                    L"Kempf\n\nCtrl+N: new snip\nCtrl+C: "
+                    L"copy image with annotations\nCtrl+S: save PNG\nCtrl+Shift+S: Save As\nCtrl+Z "
+                    L"/ Ctrl+Y: undo / redo\nV / P / H / T / O / A / K / L: select / pen / "
+                    L"highlight / text / circle / arrow / "
+                    L"check / line\n[ / ]: brush size\nDelete: remove selection\nMouse wheel: "
+                    L"zoom from Fit to 800%\nSelect + drag image: pan (also middle-drag or "
+                    L"Space+drag)\nEsc: cancel capture or current "
+                    L"edit\n\nClose the window to stay in the tray.\nFile > Exit quits "
+                    L"completely.\n\nShortcut settings are saved in your personal Tiger Snip "
+                    L"settings folder.",
+                    L"About Tiger Snip", MB_OK | MB_ICONINFORMATION);
         break;
     case Exit:
         saveToolPreferencesOrNotify();
@@ -4301,7 +4457,8 @@ void freezeDesktop(bool includeCursor = false)
 {
     app.virtualX = GetSystemMetrics(SM_XVIRTUALSCREEN);
     app.virtualY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN), height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN),
+              height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     DwmFlush();
     app.desktop = captureDesktop(app.virtualX, app.virtualY, width, height, includeCursor);
 }
@@ -4310,7 +4467,8 @@ void acceptCapture(Bitmap captured)
     cancelCapture(false);
     stashRecentSnip();
     releaseImage();
-    if (app.recent.size() == RecentLimit) app.recent.erase(app.recent.begin());
+    if (app.recent.size() == RecentLimit)
+        app.recent.erase(app.recent.begin());
     RecentSnip entry;
     GetLocalTime(&entry.captured);
     entry.sequence = ++app.recentSequence;
@@ -4358,12 +4516,13 @@ void startSnip(bool instant, bool allMonitors)
         {
             acceptCapture(std::move(app.desktop));
             if (!app.autoCopy || app.smoke || app.resizeTest)
-                status(L"Captured all monitors with the pointer - Crop (C) keeps just the area you need");
+                status(L"Captured all monitors with the pointer - Crop (C) keeps just the area you "
+                       L"need");
         }
         else if (instant)
             openOverlay();
         else if (!SetTimer(app.window, CaptureTimer, 65, nullptr))
-            throw std::runtime_error("Cannot start screen capture.");
+            throwWindowsError("Cannot start screen capture.");
     }
     catch (...)
     {
@@ -4386,10 +4545,10 @@ void openOverlay()
                 static_cast<uint8_t>(app.dimDesktop.pixels[i + c] * .48f);
     app.selecting = false;
     app.overlay = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, OverlayClass,
-                                  L"Snipper selection", WS_POPUP, app.virtualX, app.virtualY, width,
-                                  height, nullptr, nullptr, app.instance, nullptr);
+                                  L"Tiger Snip selection", WS_POPUP, app.virtualX, app.virtualY,
+                                  width, height, nullptr, nullptr, app.instance, nullptr);
     if (!app.overlay)
-        throw std::runtime_error("Cannot open the selection overlay.");
+        throwWindowsError("Cannot open the selection overlay.");
     HDC dc = GetDC(app.overlay);
     app.overlayDC = CreateCompatibleDC(dc);
     app.overlaySurface = CreateCompatibleBitmap(dc, width, height);
@@ -4627,23 +4786,35 @@ void processKey(WPARAM key)
             return;
         }
         int next = app.recentFocus;
-        if (key == VK_LEFT) --next;
-        else if (key == VK_RIGHT) ++next;
-        else if (key == VK_UP) next -= 2;
-        else if (key == VK_DOWN) next += 2;
-        else if (key == VK_HOME) next = 0;
-        else if (key == VK_END) next = static_cast<int>(app.recent.size()) - 1;
-        else if (key == VK_PRIOR) next -= recentVisibleRows() * 2;
-        else if (key == VK_NEXT) next += recentVisibleRows() * 2;
-        else if (!(GetKeyState(VK_CONTROL) & 0x8000)) return;
+        if (key == VK_LEFT)
+            --next;
+        else if (key == VK_RIGHT)
+            ++next;
+        else if (key == VK_UP)
+            next -= 2;
+        else if (key == VK_DOWN)
+            next += 2;
+        else if (key == VK_HOME)
+            next = 0;
+        else if (key == VK_END)
+            next = static_cast<int>(app.recent.size()) - 1;
+        else if (key == VK_PRIOR)
+            next -= recentVisibleRows() * 2;
+        else if (key == VK_NEXT)
+            next += recentVisibleRows() * 2;
+        else if (!(GetKeyState(VK_CONTROL) & 0x8000))
+            return;
         app.recentFocus = std::clamp(next, 0, static_cast<int>(app.recent.size()) - 1);
-        if (app.recentFocus / 2 < app.recentScroll) app.recentScroll = app.recentFocus / 2;
+        if (app.recentFocus / 2 < app.recentScroll)
+            app.recentScroll = app.recentFocus / 2;
         if (app.recentFocus / 2 >= app.recentScroll + recentVisibleRows())
             app.recentScroll = app.recentFocus / 2 - recentVisibleRows() + 1;
         buildButtons();
         repaint();
-        if (key >= VK_PRIOR && key <= VK_DOWN) return;
-        if (key == VK_HOME || key == VK_END) return;
+        if (key >= VK_PRIOR && key <= VK_DOWN)
+            return;
+        if (key == VK_HOME || key == VK_END)
+            return;
     }
     if (key == VK_F11)
     {
@@ -4706,7 +4877,8 @@ void processKey(WPARAM key)
             command(NewSnip);
             break;
         case 'R':
-            if (shift) command(RecentSnips);
+            if (shift)
+                command(RecentSnips);
             break;
         case 'C':
             command(Copy);
@@ -4790,6 +4962,8 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     {
         app.tray = false;
         addTray();
+        if (!app.tray)
+            showEditor(); // Remain accessible if Explorer cannot restore the icon.
         return 0;
     }
     switch (message)
@@ -4867,8 +5041,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         info->ptMinTrackSize = {static_cast<LONG>(850 * d), static_cast<LONG>(430 * d)};
         return 0;
     }
-    case WM_MEASUREITEM:
-    {
+    case WM_MEASUREITEM: {
         auto item = reinterpret_cast<MEASUREITEMSTRUCT *>(lp);
         if (item->CtlType == ODT_MENU)
         {
@@ -4879,8 +5052,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         }
         break;
     }
-    case WM_DRAWITEM:
-    {
+    case WM_DRAWITEM: {
         const auto item = reinterpret_cast<const DRAWITEMSTRUCT *>(lp);
         if (item->CtlType == ODT_MENU && item->itemData)
         {
@@ -4927,16 +5099,16 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_LBUTTONDOWN:
         mouseDown(lp);
         return 0;
-    case WM_LBUTTONDBLCLK:
-    {
+    case WM_LBUTTONDBLCLK: {
         if (app.recentOpen)
         {
             mouseDown(lp);
             return 0;
         }
         Point screen{GET_X_LPARAM(lp) / app.dpi, GET_Y_LPARAM(lp) / app.dpi};
-        const bool onButton = std::any_of(app.buttons.begin(), app.buttons.end(),
-            [&](const Button &button) { return button.rect.contains(screen); });
+        const bool onButton =
+            std::any_of(app.buttons.begin(), app.buttons.end(),
+                        [&](const Button &button) { return button.rect.contains(screen); });
         if (!onButton && hasImage() && !app.erasing && canvasRect().contains(screen))
         {
             const Point point = app.view.toImage(screen);
@@ -4998,12 +5170,15 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         {
             if (recentPanelRect().contains({p.x / app.dpi, p.y / app.dpi}))
             {
-                if (delta) command(delta < 0 ? RecentOlder : RecentNewer);
+                if (delta)
+                    command(delta < 0 ? RecentOlder : RecentNewer);
             }
-            else closeRecent();
+            else
+                closeRecent();
             return 0;
         }
-        if (!hasImage()) return 0;
+        if (!hasImage())
+            return 0;
         if (delta && canvasRect().contains({p.x / app.dpi, p.y / app.dpi}))
             zoomAt({p.x / app.dpi, p.y / app.dpi}, std::pow(1.2f, delta / 120.0f));
         return 0;
@@ -5158,226 +5333,281 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 }
 LRESULT CALLBACK mainProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
-    const char *operation = message == WM_SIZE ? "WM_SIZE" :
-        message == WM_PAINT ? "WM_PAINT" : message == WM_SYSCOMMAND ?
-        ((wp & 0xfff0) == SC_MAXIMIZE ? "SC_MAXIMIZE" : (wp & 0xfff0) == SC_RESTORE ?
-        "SC_RESTORE" : "WM_SYSCOMMAND") :
-        message == WM_NCLBUTTONDBLCLK ? "WM_NCLBUTTONDBLCLK" :
-        message == WM_WINDOWPOSCHANGING ? "WM_WINDOWPOSCHANGING" :
-        message == WM_WINDOWPOSCHANGED ? "WM_WINDOWPOSCHANGED" :
-        message == WM_NCCALCSIZE ? "WM_NCCALCSIZE" : message == WM_NCPAINT ? "WM_NCPAINT" :
-        message == WM_DPICHANGED ? "WM_DPICHANGED" :
-        message == WM_TIMER && wp == TraceHeartbeatTimer ? "heartbeat" : nullptr;
-    // Trace resize messages, diagnostic heartbeats, and other messages taking over 100 ms.
-    // Normal launches perform no diagnostic I/O or heartbeat polling.
-    ResizeTrace trace(operation, message);
-    try
-    {
-        return mainMessage(hwnd, message, wp, lp);
-    }
-    catch (const std::exception &exception)
-    {
-        if (message == WM_PAINT)
-        {
-            ValidateRect(hwnd, nullptr);
-            resetPreview();
-            app.target.reset();
-        }
-        error(hwnd, exception.what());
-        return 0;
-    }
+    return callbackBoundary<LRESULT>(
+        [&]() -> LRESULT {
+#ifdef TIGER_SNIP_TESTING
+            if (testing::callbackCheckpoint)
+                testing::callbackCheckpoint("mainProcedure", message);
+#endif
+            const char *operation = message == WM_SIZE    ? "WM_SIZE"
+                                    : message == WM_PAINT ? "WM_PAINT"
+                                    : message == WM_SYSCOMMAND
+                                        ? ((wp & 0xfff0) == SC_MAXIMIZE  ? "SC_MAXIMIZE"
+                                           : (wp & 0xfff0) == SC_RESTORE ? "SC_RESTORE"
+                                                                         : "WM_SYSCOMMAND")
+                                    : message == WM_NCLBUTTONDBLCLK   ? "WM_NCLBUTTONDBLCLK"
+                                    : message == WM_WINDOWPOSCHANGING ? "WM_WINDOWPOSCHANGING"
+                                    : message == WM_WINDOWPOSCHANGED  ? "WM_WINDOWPOSCHANGED"
+                                    : message == WM_NCCALCSIZE        ? "WM_NCCALCSIZE"
+                                    : message == WM_NCPAINT           ? "WM_NCPAINT"
+                                    : message == WM_DPICHANGED        ? "WM_DPICHANGED"
+                                    : message == WM_TIMER && wp == TraceHeartbeatTimer ? "heartbeat"
+                                                                                       : nullptr;
+            // Trace resize messages, diagnostic heartbeats, and other messages taking over 100 ms.
+            // Normal launches perform no diagnostic I/O or heartbeat polling.
+            ResizeTrace trace(operation, message);
+            return mainMessage(hwnd, message, wp, lp);
+        },
+        [&](const char *failure) {
+            if (message == WM_PAINT)
+            {
+                ValidateRect(hwnd, nullptr);
+                resetPreview();
+                app.target.reset();
+            }
+            error(hwnd, failure);
+        },
+        message == WM_CREATE ? -1 : 0);
 }
 LRESULT CALLBACK overlayProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
-    try
-    {
-        switch (message)
-        {
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_PAINT:
-            paintOverlay(hwnd);
-            return 0;
-        case WM_SETCURSOR:
-            SetCursor(LoadCursorW(nullptr, IDC_CROSS));
-            return TRUE;
-        case WM_LBUTTONDOWN:
-            app.selectionStart = app.selectionEnd = selectionEventPoint(lp);
-            app.selecting = true;
-            SetCapture(hwnd);
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        case WM_MOUSEMOVE:
-            if (app.selecting)
-                app.selectionEnd = selectionEventPoint(lp);
-            InvalidateRect(hwnd, nullptr, FALSE);
-            return 0;
-        case WM_LBUTTONUP:
-            if (app.selecting)
+    return callbackBoundary<LRESULT>(
+        [&]() -> LRESULT {
+#ifdef TIGER_SNIP_TESTING
+            if (testing::callbackCheckpoint)
+                testing::callbackCheckpoint("overlayProcedure", message);
+#endif
+            try
             {
-                app.selectionEnd = selectionEventPoint(lp);
-                ReleaseCapture();
-                finishCapture();
+                switch (message)
+                {
+                case WM_ERASEBKGND:
+                    return 1;
+                case WM_PAINT:
+                    paintOverlay(hwnd);
+                    return 0;
+                case WM_SETCURSOR:
+                    SetCursor(LoadCursorW(nullptr, IDC_CROSS));
+                    return TRUE;
+                case WM_LBUTTONDOWN:
+                    app.selectionStart = app.selectionEnd = selectionEventPoint(lp);
+                    app.selecting = true;
+                    SetCapture(hwnd);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                case WM_MOUSEMOVE:
+                    if (app.selecting)
+                        app.selectionEnd = selectionEventPoint(lp);
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                    return 0;
+                case WM_LBUTTONUP:
+                    if (app.selecting)
+                    {
+                        app.selectionEnd = selectionEventPoint(lp);
+                        ReleaseCapture();
+                        finishCapture();
+                    }
+                    return 0;
+                case WM_KEYDOWN:
+                    if (wp == VK_ESCAPE)
+                        cancelCapture();
+                    return 0;
+                case WM_RBUTTONUP:
+                    cancelCapture();
+                    return 0;
+                case WM_DISPLAYCHANGE:
+                    cancelCapture();
+                    return 0;
+                case WM_CLOSE:
+                    cancelCapture();
+                    return 0;
+                default:
+                    break;
+                }
+                return DefWindowProcW(hwnd, message, wp, lp);
             }
-            return 0;
-        case WM_KEYDOWN:
-            if (wp == VK_ESCAPE)
+            catch (const std::exception &exception)
+            {
                 cancelCapture();
-            return 0;
-        case WM_RBUTTONUP:
+                error(app.window, exception.what());
+                return 0;
+            }
+        },
+        [&](const char *failure) {
+            error(app.window, failure);
             cancelCapture();
-            return 0;
-        case WM_DISPLAYCHANGE:
-            cancelCapture();
-            return 0;
-        case WM_CLOSE:
-            cancelCapture();
-            return 0;
-        default:
-            break;
-        }
-        return DefWindowProcW(hwnd, message, wp, lp);
-    }
-    catch (const std::exception &exception)
-    {
-        cancelCapture();
-        error(app.window, exception.what());
-        return 0;
-    }
+        },
+        0);
 }
-LRESULT CALLBACK shortcutFieldProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp,
-                                       UINT_PTR, DWORD_PTR value)
+LRESULT CALLBACK shortcutFieldProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp, UINT_PTR,
+                                        DWORD_PTR value)
 {
-    // The native hotkey control can store VK_PAUSE yet paint its name as blank.
-    // Use an edit control for the label and retain the WORD format of existing settings.
-    if (message == HKM_GETHOTKEY)
-        return static_cast<WORD>(value);
-    if (message == HKM_SETHOTKEY)
-    {
-        const auto key = static_cast<WORD>(wp);
-        SetWindowSubclass(hwnd, shortcutFieldProcedure, 1, key);
-        SetWindowTextW(hwnd, hotkeyName(key).c_str());
-        SendMessageW(hwnd, EM_SETSEL, -1, -1);
-        return 0;
-    }
-    if (message == HKM_SETRULES)
-        return 0;
-    if (message == WM_GETDLGCODE)
-        return DefSubclassProc(hwnd, message, wp, lp) | DLGC_WANTALLKEYS;
-    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
-    {
-        if (wp == VK_TAB)
-        {
-            SetFocus(GetNextDlgTabItem(GetParent(hwnd), hwnd, GetKeyState(VK_SHIFT) & 0x8000));
-            return 0;
-        }
-        if (wp == VK_RETURN || wp == VK_ESCAPE)
-        {
-            SendMessageW(GetParent(hwnd), WM_COMMAND, wp == VK_RETURN ? IDOK : IDCANCEL, 0);
-            return 0;
-        }
-        if (wp == VK_BACK || wp == VK_DELETE)
-        {
-            SendMessageW(hwnd, HKM_SETHOTKEY, 0, 0);
-            return 0;
-        }
-        if (wp == VK_CONTROL || wp == VK_MENU || wp == VK_SHIFT ||
-            wp == VK_LWIN || wp == VK_RWIN)
-            return 0;
-        BYTE modifiers = 0;
-        if (GetKeyState(VK_CONTROL) & 0x8000) modifiers |= HOTKEYF_CONTROL;
-        if (GetKeyState(VK_MENU) & 0x8000) modifiers |= HOTKEYF_ALT;
-        if (GetKeyState(VK_SHIFT) & 0x8000) modifiers |= HOTKEYF_SHIFT;
-        if (lp & (1LL << 24)) modifiers |= HOTKEYF_EXT;
-        SendMessageW(hwnd, HKM_SETHOTKEY, MAKEWORD(static_cast<BYTE>(wp), modifiers), 0);
-        return 0;
-    }
-    if (message == WM_CHAR || message == WM_SYSCHAR)
-        return 0;
-    if (message == WM_NCDESTROY)
-        RemoveWindowSubclass(hwnd, shortcutFieldProcedure, 1);
-    return DefSubclassProc(hwnd, message, wp, lp);
+    return callbackBoundary<LRESULT>(
+        [&]() -> LRESULT {
+#ifdef TIGER_SNIP_TESTING
+            if (testing::callbackCheckpoint)
+                testing::callbackCheckpoint("shortcutFieldProcedure", message);
+#endif
+            // The native hotkey control can store VK_PAUSE yet paint its name as blank.
+            // Use an edit control for the label and retain the WORD format of existing settings.
+            if (message == HKM_GETHOTKEY)
+                return static_cast<WORD>(value);
+            if (message == HKM_SETHOTKEY)
+            {
+                const auto key = static_cast<WORD>(wp);
+                if (!SetWindowSubclass(hwnd, shortcutFieldProcedure, 1, key))
+                    throwWindowsError("Cannot update the shortcut control.");
+                SetWindowTextW(hwnd, hotkeyName(key).c_str());
+                SendMessageW(hwnd, EM_SETSEL, -1, -1);
+                return 0;
+            }
+            if (message == HKM_SETRULES)
+                return 0;
+            if (message == WM_GETDLGCODE)
+                return DefSubclassProc(hwnd, message, wp, lp) | DLGC_WANTALLKEYS;
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+            {
+                if (wp == VK_TAB)
+                {
+                    SetFocus(
+                        GetNextDlgTabItem(GetParent(hwnd), hwnd, GetKeyState(VK_SHIFT) & 0x8000));
+                    return 0;
+                }
+                if (wp == VK_RETURN || wp == VK_ESCAPE)
+                {
+                    SendMessageW(GetParent(hwnd), WM_COMMAND, wp == VK_RETURN ? IDOK : IDCANCEL, 0);
+                    return 0;
+                }
+                if (wp == VK_BACK || wp == VK_DELETE)
+                {
+                    SendMessageW(hwnd, HKM_SETHOTKEY, 0, 0);
+                    return 0;
+                }
+                if (wp == VK_CONTROL || wp == VK_MENU || wp == VK_SHIFT || wp == VK_LWIN ||
+                    wp == VK_RWIN)
+                    return 0;
+                BYTE modifiers = 0;
+                if (GetKeyState(VK_CONTROL) & 0x8000)
+                    modifiers |= HOTKEYF_CONTROL;
+                if (GetKeyState(VK_MENU) & 0x8000)
+                    modifiers |= HOTKEYF_ALT;
+                if (GetKeyState(VK_SHIFT) & 0x8000)
+                    modifiers |= HOTKEYF_SHIFT;
+                if (lp & (1LL << 24))
+                    modifiers |= HOTKEYF_EXT;
+                SendMessageW(hwnd, HKM_SETHOTKEY, MAKEWORD(static_cast<BYTE>(wp), modifiers), 0);
+                return 0;
+            }
+            if (message == WM_CHAR || message == WM_SYSCHAR)
+                return 0;
+            if (message == WM_NCDESTROY)
+                RemoveWindowSubclass(hwnd, shortcutFieldProcedure, 1);
+            return DefSubclassProc(hwnd, message, wp, lp);
+        },
+        [&](const char *failure) { error(GetParent(hwnd), failure); }, 0);
 }
 LRESULT CALLBACK settingsProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
-    switch (message)
-    {
-    case WM_CREATE: {
-        float d = dpiFor(hwnd);
-        auto control = [&](const wchar_t *cls, const wchar_t *label, DWORD style, int x, int y,
-                           int w, int h, int id) {
-            HWND item = CreateWindowExW(
-                0, cls, label, WS_CHILD | WS_VISIBLE | style, static_cast<int>(x * d),
-                static_cast<int>(y * d), static_cast<int>(w * d), static_cast<int>(h * d), hwnd,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), app.instance, nullptr);
-            SendMessageW(item, WM_SETFONT, reinterpret_cast<WPARAM>(app.dialogFont), TRUE);
-            return item;
-        };
-        control(L"STATIC", L"Select an area (click and drag):", 0, 20, 15, 395, 24, 0);
-        app.hotkeyControl =
-            control(L"EDIT", L"", WS_TABSTOP | WS_BORDER | ES_READONLY | ES_AUTOHSCROLL,
-                    20, 48, 395, 30, 10);
-        SetWindowSubclass(app.hotkeyControl, shortcutFieldProcedure, 1, 0);
-        SendMessageW(app.hotkeyControl, HKM_SETRULES, 0, 0);
-        SendMessageW(app.hotkeyControl, HKM_SETHOTKEY, app.hotkey, 0);
-        control(L"STATIC", L"Instant capture (all monitors and mouse pointer):", 0, 20, 91, 395, 24, 0);
-        app.instantHotkeyControl =
-            control(L"EDIT", L"", WS_TABSTOP | WS_BORDER | ES_READONLY | ES_AUTOHSCROLL,
-                    20, 124, 395, 30, 11);
-        SetWindowSubclass(app.instantHotkeyControl, shortcutFieldProcedure, 1, 0);
-        SendMessageW(app.instantHotkeyControl, HKM_SETRULES, 0, 0);
-        SendMessageW(app.instantHotkeyControl, HKM_SETHOTKEY, app.instantHotkey, 0);
-        control(L"STATIC",
-                L"Use Ctrl or Alt, or Pause alone. Backspace disables.\nInstant capture opens directly in the editor; use Crop (C).",
-                0, 20, 170, 395, 44, 0);
-        control(L"BUTTON", L"Save", WS_TABSTOP | BS_DEFPUSHBUTTON, 237, 246, 84, 30, IDOK);
-        control(L"BUTTON", L"Cancel", WS_TABSTOP, 331, 246, 84, 30, IDCANCEL);
-        return 0;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wp) == IDCANCEL)
-        {
-            closeSettings();
-            return 0;
-        }
-        else if (LOWORD(wp) == IDOK)
-        {
-            WORD value = static_cast<WORD>(SendMessageW(app.hotkeyControl, HKM_GETHOTKEY, 0, 0));
-            WORD full = static_cast<WORD>(SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0, 0));
-            if (!registerShortcuts(value, full))
+    return callbackBoundary<LRESULT>(
+        [&]() -> LRESULT {
+#ifdef TIGER_SNIP_TESTING
+            if (testing::callbackCheckpoint)
+                testing::callbackCheckpoint("settingsProcedure", message);
+#endif
+            switch (message)
+            {
+            case WM_CREATE: {
+                float d = dpiFor(hwnd);
+                auto control = [&](const wchar_t *cls, const wchar_t *label, DWORD style, int x,
+                                   int y, int w, int h, int id) {
+                    HWND item = CreateWindowExW(
+                        0, cls, label, WS_CHILD | WS_VISIBLE | style, static_cast<int>(x * d),
+                        static_cast<int>(y * d), static_cast<int>(w * d), static_cast<int>(h * d),
+                        hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), app.instance,
+                        nullptr);
+                    if (!item)
+                        throwWindowsError("Cannot create a settings control.");
+                    SendMessageW(item, WM_SETFONT, reinterpret_cast<WPARAM>(app.dialogFont), TRUE);
+                    return item;
+                };
+                control(L"STATIC", L"Select an area (click and drag):", 0, 20, 15, 395, 24, 0);
+                app.hotkeyControl =
+                    control(L"EDIT", L"", WS_TABSTOP | WS_BORDER | ES_READONLY | ES_AUTOHSCROLL, 20,
+                            48, 395, 30, 10);
+                if (!SetWindowSubclass(app.hotkeyControl, shortcutFieldProcedure, 1, 0))
+                    throwWindowsError("Cannot initialize the area shortcut control.");
+                SendMessageW(app.hotkeyControl, HKM_SETRULES, 0, 0);
+                SendMessageW(app.hotkeyControl, HKM_SETHOTKEY, app.hotkey, 0);
+                control(L"STATIC", L"Instant capture (all monitors and mouse pointer):", 0, 20, 91,
+                        395, 24, 0);
+                app.instantHotkeyControl =
+                    control(L"EDIT", L"", WS_TABSTOP | WS_BORDER | ES_READONLY | ES_AUTOHSCROLL, 20,
+                            124, 395, 30, 11);
+                if (!SetWindowSubclass(app.instantHotkeyControl, shortcutFieldProcedure, 1, 0))
+                    throwWindowsError("Cannot initialize the instant shortcut control.");
+                SendMessageW(app.instantHotkeyControl, HKM_SETRULES, 0, 0);
+                SendMessageW(app.instantHotkeyControl, HKM_SETHOTKEY, app.instantHotkey, 0);
+                control(L"STATIC",
+                        L"Use Ctrl or Alt, or Pause alone. Backspace disables.\nInstant capture "
+                        L"opens directly in the editor; use Crop (C).",
+                        0, 20, 170, 395, 44, 0);
+                control(L"BUTTON", L"Save", WS_TABSTOP | BS_DEFPUSHBUTTON, 237, 246, 84, 30, IDOK);
+                control(L"BUTTON", L"Cancel", WS_TABSTOP, 331, 246, 84, 30, IDCANCEL);
                 return 0;
-            std::wstring number = std::to_wstring(value);
-            bool saved = WritePrivateProfileStringW(L"Settings", L"Hotkey", number.c_str(),
-                                                    app.iniPath.c_str()) != FALSE;
-            number = std::to_wstring(full);
-            saved = (WritePrivateProfileStringW(L"Settings", L"InstantHotkey", number.c_str(),
-                                               app.iniPath.c_str()) != FALSE) && saved;
-            closeSettings();
-            status(L"Area: " + hotkeyName(app.hotkey) + L" | All monitors: " + hotkeyName(app.instantHotkey));
-            if (!saved)
-                error(app.window,
-                      "Shortcut changed for this session, but settings could not be saved beside "
-                      "the executable. Move the app to a writable folder.");
-            return 0;
-        }
-        break;
-    case WM_CTLCOLORSTATIC:
-        if (reinterpret_cast<HWND>(lp) == app.hotkeyControl ||
-            reinterpret_cast<HWND>(lp) == app.instantHotkeyControl)
-        {
-            HDC dc = reinterpret_cast<HDC>(wp);
-            SetBkColor(dc, GetSysColor(COLOR_WINDOW));
-            SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
-            return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
-        }
-        break;
-    case WM_CLOSE:
-        closeSettings();
-        return 0;
-    default:
-        break;
-    }
-    return DefWindowProcW(hwnd, message, wp, lp);
+            }
+            case WM_COMMAND:
+                if (LOWORD(wp) == IDCANCEL)
+                {
+                    closeSettings();
+                    return 0;
+                }
+                else if (LOWORD(wp) == IDOK)
+                {
+                    WORD value =
+                        static_cast<WORD>(SendMessageW(app.hotkeyControl, HKM_GETHOTKEY, 0, 0));
+                    WORD full = static_cast<WORD>(
+                        SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0, 0));
+                    if (!registerShortcuts(value, full))
+                        return 0;
+                    app.shortcutsDirty = true;
+                    bool saved = saveToolPreferences();
+                    closeSettings();
+                    status(L"Area: " + hotkeyName(app.hotkey) + L" | All monitors: " +
+                           hotkeyName(app.instantHotkey));
+                    if (!saved)
+                        error(app.window, app.preferenceError.c_str());
+                    return 0;
+                }
+                break;
+            case WM_CTLCOLORSTATIC:
+                if (reinterpret_cast<HWND>(lp) == app.hotkeyControl ||
+                    reinterpret_cast<HWND>(lp) == app.instantHotkeyControl)
+                {
+                    HDC dc = reinterpret_cast<HDC>(wp);
+                    SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+                    SetTextColor(dc, GetSysColor(COLOR_WINDOWTEXT));
+                    return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+                }
+                break;
+            case WM_CLOSE:
+                closeSettings();
+                return 0;
+            default:
+                break;
+            }
+            return DefWindowProcW(hwnd, message, wp, lp);
+        },
+        [&](const char *failure) {
+            error(app.window, failure);
+            if (message == WM_CREATE)
+            {
+                app.hotkeyControl = app.instantHotkeyControl = nullptr;
+                EnableWindow(app.window, TRUE);
+            }
+            else
+                closeSettings();
+        },
+        message == WM_CREATE ? -1 : 0);
 }
 void registerClasses()
 {
@@ -5391,24 +5621,24 @@ void registerClasses()
     cls.lpszClassName = app.diagnosticInstance ? DiagnosticClass : MainClass;
     cls.lpfnWndProc = mainProcedure;
     if (!RegisterClassExW(&cls))
-        throw std::runtime_error("Cannot register the editor window.");
+        throwWindowsError("Cannot register the editor window.");
     cls.style = 0;
     cls.lpszClassName = OverlayClass;
     cls.lpfnWndProc = overlayProcedure;
     cls.hCursor = LoadCursorW(nullptr, IDC_CROSS);
     if (!RegisterClassExW(&cls))
-        throw std::runtime_error("Cannot register capture window.");
+        throwWindowsError("Cannot register capture window.");
     cls.lpszClassName = SettingsClass;
     cls.lpfnWndProc = settingsProcedure;
     cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
     if (!RegisterClassExW(&cls))
-        throw std::runtime_error("Cannot register settings window.");
+        throwWindowsError("Cannot register settings window.");
 }
+std::filesystem::path testReportDirectory;
 void writeTestReport(const wchar_t *filename, const std::string &content)
 {
-    std::ofstream file(filename, std::ios::binary);
-    file << content;
+    checkedTestReport(testReportDirectory / filename, content);
 }
 void testPenSizePreferences()
 {
@@ -5421,21 +5651,28 @@ void testPenSizePreferences()
     app.highlightWidth = 31;
     app.fontSize = 35;
     changeThickness(9);
-    if (app.thickness != 13 || !app.toolPreferencesDirty || app.highlightWidth != 31 || app.fontSize != 35)
-        throw std::runtime_error("Changing pen size did not mark preferences dirty or affected other sizes.");
-    if (!saveToolPreferences()) throw std::runtime_error("Could not save pen-size preferences.");
+    if (app.thickness != 13 || !app.toolPreferencesDirty || app.highlightWidth != 31 ||
+        app.fontSize != 35)
+        throw std::runtime_error(
+            "Changing pen size did not mark preferences dirty or affected other sizes.");
+    if (!saveToolPreferences())
+        throw std::runtime_error("Could not save pen-size preferences.");
     app.thickness = 4;
     loadToolPreferences();
-    if (app.thickness != 13 || app.toolPreferencesDirty || app.highlightWidth != 31 || app.fontSize != 35)
+    if (app.thickness != 13 || app.toolPreferencesDirty || app.highlightWidth != 31 ||
+        app.fontSize != 35)
         throw std::runtime_error("Pen size did not survive saving and reloading.");
     WritePrivateProfileStringW(L"ToolPreferences", L"StrokeWidth", L"0", app.iniPath.c_str());
     loadToolPreferences();
-    if (app.thickness != 1) throw std::runtime_error("Saved pen size was not clamped to the minimum.");
+    if (app.thickness != 1)
+        throw std::runtime_error("Saved pen size was not clamped to the minimum.");
     WritePrivateProfileStringW(L"ToolPreferences", L"StrokeWidth", L"999", app.iniPath.c_str());
     loadToolPreferences();
-    if (app.thickness != 100) throw std::runtime_error("Saved pen size was not clamped to the maximum.");
+    if (app.thickness != 100)
+        throw std::runtime_error("Saved pen size was not clamped to the maximum.");
     changeThickness(1);
-    if (app.toolPreferencesDirty) throw std::runtime_error("An unchanged pen size caused a preference write.");
+    if (app.toolPreferencesDirty)
+        throw std::runtime_error("An unchanged pen size caused a preference write.");
     app.thickness = 40;
     changeThickness(60);
     if (app.thickness != 100 || !app.toolPreferencesDirty || !saveToolPreferences())
@@ -5459,7 +5696,8 @@ void testPenSizePreferences()
         throw std::runtime_error("Stroke resize undo affected the remembered pen size.");
     app.document.clear();
     changeColor(rgb(12, 34, 56));
-    if (!saveToolPreferences()) throw std::runtime_error("Could not save the pen restart fixture.");
+    if (!saveToolPreferences())
+        throw std::runtime_error("Could not save the pen restart fixture.");
 }
 struct RenderingDialogTest
 {
@@ -5484,9 +5722,11 @@ Bitmap renderNativeWindow(HWND window)
     HBITMAP surface = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
     if (!dc || !surface)
     {
-        if (surface) DeleteObject(surface);
-        if (dc) DeleteDC(dc);
-        throw std::runtime_error("Cannot create native dialog preview.");
+        if (surface)
+            DeleteObject(surface);
+        if (dc)
+            DeleteDC(dc);
+        throwWindowsError("Cannot create native dialog preview.");
     }
     const auto previous = SelectObject(dc, surface);
     const bool painted = PrintWindow(window, dc, PW_RENDERFULLCONTENT) != FALSE;
@@ -5503,26 +5743,35 @@ Bitmap renderNativeWindow(HWND window)
         throw std::runtime_error("Cannot render native dialog preview.");
     return result;
 }
-HRESULT CALLBACK renderingDialogTestCallback(HWND hwnd, UINT notification, WPARAM elapsed,
-                                            LPARAM, LONG_PTR context)
+HRESULT CALLBACK renderingDialogTestCallback(HWND hwnd, UINT notification, WPARAM elapsed, LPARAM,
+                                             LONG_PTR context)
 {
-    auto &test = *reinterpret_cast<RenderingDialogTest *>(context);
-    if (notification == TDN_CREATED)
-        SendMessageW(hwnd, TDM_CLICK_VERIFICATION, test.software, TRUE);
-    if (notification == TDN_TIMER && elapsed >= 200 && !test.handled)
-    {
-        test.handled = true;
-        try
-        {
-            saveBytes(test.preview, app.graphics.png(renderNativeWindow(hwnd)));
-        }
-        catch (const std::exception &exception)
-        {
-            test.error = exception.what();
-        }
-        SendMessageW(hwnd, TDM_CLICK_BUTTON, test.error.empty() ? test.button : IDCANCEL, 0);
-    }
-    return S_OK;
+    return callbackBoundary<HRESULT>(
+        [&]() -> HRESULT {
+            auto &test = *reinterpret_cast<RenderingDialogTest *>(context);
+            if (notification == TDN_CREATED)
+                SendMessageW(hwnd, TDM_CLICK_VERIFICATION, test.software, TRUE);
+            if (notification == TDN_TIMER && elapsed >= 200 && !test.handled)
+            {
+                test.handled = true;
+                try
+                {
+                    saveBytes(test.preview, app.graphics.png(renderNativeWindow(hwnd)));
+                }
+                catch (const std::exception &exception)
+                {
+                    test.error = exception.what();
+                }
+                SendMessageW(hwnd, TDM_CLICK_BUTTON, test.error.empty() ? test.button : IDCANCEL,
+                             0);
+            }
+            return S_OK;
+        },
+        [&](const char *failure) {
+            showError(hwnd, failure);
+            SendMessageW(hwnd, TDM_CLICK_BUTTON, IDCANCEL, 0);
+        },
+        E_FAIL);
 }
 void testRenderingSettings()
 {
@@ -5539,11 +5788,11 @@ void testRenderingSettings()
         throw std::runtime_error("Cannot establish rendering test settings.");
     dialog(true, IDOK, L"smoke-test-rendering-software.png");
     if (!app.softwareRendering || app.rendererSpecified ||
-        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 1)
+        preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 0) != 1)
         throw std::runtime_error("Applying software rendering did not switch and save it.");
     dialog(false, IDCANCEL, L"smoke-test-rendering-cancel.png");
     if (!app.softwareRendering ||
-        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 0, app.iniPath.c_str()) != 1)
+        preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 0) != 1)
         throw std::runtime_error("Cancelling rendering settings changed the mode or preference.");
     app.image = Bitmap::create(480, 320);
     for (size_t i = 0; i < app.image.pixels.size(); i += 4)
@@ -5567,23 +5816,26 @@ void testRenderingSettings()
     const auto view = app.view;
     dialog(false, IDOK, L"smoke-test-rendering-hardware.png");
     if (app.softwareRendering ||
-        GetPrivateProfileIntW(L"Settings", L"SoftwareRendering", 1, app.iniPath.c_str()) != 0)
+        preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 1) != 0)
         throw std::runtime_error("Applying hardware rendering did not switch and save it.");
     if (app.image.pixels != source || app.document.items != items || app.document.selected != 0 ||
         !app.dirty || app.previewImage.pixels.data() != cachedPreview ||
         app.view.scale != view.scale || app.view.origin != view.origin ||
-        app.graphics.exportImage(app.image, app.document.items, app.exportOptions).pixels != exported ||
+        app.graphics.exportImage(app.image, app.document.items, app.exportOptions).pixels !=
+            exported ||
         !app.document.undo() || !app.document.items.empty() || !app.document.redo() ||
         app.document.items != items)
-        throw std::runtime_error("Switching renderers changed the snip, annotations, history, view, or export.");
+        throw std::runtime_error(
+            "Switching renderers changed the snip, annotations, history, view, or export.");
     if (!setSoftwareRendering(originalMode))
         throw std::runtime_error("Cannot restore rendering test settings.");
     releaseImage();
     repaint();
     UpdateWindow(app.window);
 }
-const std::vector<Color> PersistenceTestPalette = {Palette[0], Palette[1], Palette[2], Palette[3],
-    Palette[4], Palette[5], Palette[6], Palette[7], rgb(12, 34, 56), rgb(98, 76, 54)};
+const std::vector<Color> PersistenceTestPalette = {
+    Palette[0], Palette[1], Palette[2], Palette[3],      Palette[4],
+    Palette[5], Palette[6], Palette[7], rgb(12, 34, 56), rgb(98, 76, 54)};
 struct PaletteDialogTest
 {
     bool cancel = false;
@@ -5599,7 +5851,8 @@ void drivePaletteDialog(HWND window)
             throw std::runtime_error("Invalid hex color was accepted.");
         SetDlgItemTextW(window, 11, L"#123456");
         BOOL valid = FALSE;
-        if (!IsWindowEnabled(GetDlgItem(window, IDOK)) || GetDlgItemInt(window, 12, &valid, FALSE) != 18 || !valid)
+        if (!IsWindowEnabled(GetDlgItem(window, IDOK)) ||
+            GetDlgItemInt(window, 12, &valid, FALSE) != 18 || !valid)
             throw std::runtime_error("Hex did not update RGB values.");
         SetDlgItemTextW(window, 12, L"256");
         if (IsWindowEnabled(GetDlgItem(window, IDOK)))
@@ -5613,7 +5866,8 @@ void drivePaletteDialog(HWND window)
         RECT bounds{};
         GetClientRect(spectrum, &bounds);
         SendDlgItemMessageW(window, 15, TBM_SETPOS, TRUE, 120);
-        SendMessageW(window, WM_HSCROLL, TB_THUMBPOSITION, reinterpret_cast<LPARAM>(GetDlgItem(window, 15)));
+        SendMessageW(window, WM_HSCROLL, TB_THUMBPOSITION,
+                     reinterpret_cast<LPARAM>(GetDlgItem(window, 15)));
         SendMessageW(spectrum, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(bounds.right - 1, 0));
         SendMessageW(spectrum, WM_LBUTTONUP, 0, MAKELPARAM(bounds.right - 1, 0));
         GetDlgItemTextW(window, 11, hex, 16);
@@ -5622,7 +5876,8 @@ void drivePaletteDialog(HWND window)
         SetDlgItemTextW(window, 11, L"#0C2238");
         if (paletteDialogTest.preview)
         {
-            RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            RedrawWindow(window, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             saveBytes(paletteDialogTest.preview, app.graphics.png(renderNativeWindow(window)));
         }
     }
@@ -5631,7 +5886,7 @@ void drivePaletteDialog(HWND window)
         paletteDialogTest.error = exception.what();
     }
     SendMessageW(window, WM_COMMAND,
-        paletteDialogTest.cancel || !paletteDialogTest.error.empty() ? IDCANCEL : IDOK, 0);
+                 paletteDialogTest.cancel || !paletteDialogTest.error.empty() ? IDCANCEL : IDOK, 0);
 }
 void testPaletteTools()
 {
@@ -5641,7 +5896,8 @@ void testPaletteTools()
     const float originalDpi = app.dpi;
     RECT originalWindow{};
     GetWindowRect(app.window, &originalWindow);
-    app.iniPath = (std::filesystem::path(originalIni).parent_path() / L"palette-settings.ini").wstring();
+    app.iniPath =
+        (std::filesystem::path(originalIni).parent_path() / L"palette-settings.ini").wstring();
     WritePrivateProfileStringW(L"Palette", nullptr, nullptr, app.iniPath.c_str());
     loadToolPreferences();
     if (app.palette != std::vector<Color>(Palette.begin(), Palette.end()) || app.paletteDirty)
@@ -5652,14 +5908,16 @@ void testPaletteTools()
     {
         app.dpi = dpi;
         SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(1000 * dpi),
-            static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                     static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         auto clickColor = [&](int index) {
             buildButtons();
-            const auto button = std::find_if(app.buttons.begin(), app.buttons.end(),
-                [&](const Button &b) { return b.command == ColorFirst + index; });
-            if (button == app.buttons.end()) throw std::runtime_error("Palette swatch is missing.");
+            const auto button =
+                std::find_if(app.buttons.begin(), app.buttons.end(),
+                             [&](const Button &b) { return b.command == ColorFirst + index; });
+            if (button == app.buttons.end())
+                throw std::runtime_error("Palette swatch is missing.");
             const auto point = MAKELPARAM(static_cast<int>((button->rect.left + 12) * dpi),
-                                         static_cast<int>((button->rect.top + 12) * dpi));
+                                          static_cast<int>((button->rect.top + 12) * dpi));
             SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point);
             SendMessageW(app.window, WM_LBUTTONUP, 0, point);
         };
@@ -5669,14 +5927,17 @@ void testPaletteTools()
         clickColor(4);
         if (app.tool != Tool::Pen || activeColor() != Palette[4] || app.document.canUndo() ||
             renderedExport().pixels != unchanged)
-            throw std::runtime_error("Selecting a color with no selected annotation must activate Pen without editing.");
+            throw std::runtime_error(
+                "Selecting a color with no selected annotation must activate Pen without editing.");
         selectTool(Tool::Select);
         clickColor(4);
         if (app.tool != Tool::Pen || activeColor() != Palette[4])
-            throw std::runtime_error("Clicking the remembered Pen color must still switch Select to Pen.");
+            throw std::runtime_error(
+                "Clicking the remembered Pen color must still switch Select to Pen.");
         Annotation shape;
         shape.kind = Tool::Circle;
-        shape.a = {20, 20}; shape.b = {100, 100};
+        shape.a = {20, 20};
+        shape.b = {100, 100};
         app.document.items = {shape};
         selectTool(Tool::Select);
         app.document.selected = 0;
@@ -5684,9 +5945,10 @@ void testPaletteTools()
         if (app.tool != Tool::Select || app.document.selected != 0 ||
             app.document.items[0].color != Palette[3] ||
             app.colors[static_cast<size_t>(Tool::Circle)] != Palette[3] ||
-            app.colors[static_cast<size_t>(Tool::Pen)] != Palette[4] ||
-            !app.document.undo() || app.document.items[0] != shape || app.document.canUndo())
-            throw std::runtime_error("Selected annotation recoloring must retain Select and undo in one step.");
+            app.colors[static_cast<size_t>(Tool::Pen)] != Palette[4] || !app.document.undo() ||
+            app.document.items[0] != shape || app.document.canUndo())
+            throw std::runtime_error(
+                "Selected annotation recoloring must retain Select and undo in one step.");
     }
     app.document.clear();
     app.dpi = originalDpi;
@@ -5699,12 +5961,15 @@ void testPaletteTools()
     const auto paletteBefore = app.palette;
     paletteDialogTest = {true, L"palette-picker-cancel.png", {}};
     customColor(drivePaletteDialog);
-    if (!paletteDialogTest.error.empty()) throw std::runtime_error(paletteDialogTest.error);
-    if (app.palette != paletteBefore || app.document.items[0].color != item.color || app.document.canUndo())
+    if (!paletteDialogTest.error.empty())
+        throw std::runtime_error(paletteDialogTest.error);
+    if (app.palette != paletteBefore || app.document.items[0].color != item.color ||
+        app.document.canUndo())
         throw std::runtime_error("Cancel changed the palette, annotation or history.");
     paletteDialogTest = {false, L"palette-picker-add.png", {}};
     customColor(drivePaletteDialog);
-    if (!paletteDialogTest.error.empty()) throw std::runtime_error(paletteDialogTest.error);
+    if (!paletteDialogTest.error.empty())
+        throw std::runtime_error(paletteDialogTest.error);
     if (app.palette.size() != 9 || app.palette.back() != rgb(12, 34, 56) ||
         app.document.items[0].color != app.palette.back() || !app.document.canUndo())
         throw std::runtime_error("Adding a color did not add a swatch and recolor with undo.");
@@ -5719,11 +5984,15 @@ void testPaletteTools()
     const Color currentColor = activeColor();
     deletePaletteColor(8);
     if (activeColor() != currentColor || renderedExport().pixels != unchangedExport)
-        throw std::runtime_error("Deleting a swatch altered the active color or existing annotations.");
+        throw std::runtime_error(
+            "Deleting a swatch altered the active color or existing annotations.");
     paletteDialogTest = {false, L"palette-picker-edit.png", {}};
-    const auto edited = pickPaletteColor(app.instance, app.window, app.palette[0], true, drivePaletteDialog);
-    if (!paletteDialogTest.error.empty()) throw std::runtime_error(paletteDialogTest.error);
-    if (!edited) throw std::runtime_error("Editing a palette color was canceled unexpectedly.");
+    const auto edited =
+        pickPaletteColor(app.instance, app.window, app.palette[0], true, drivePaletteDialog);
+    if (!paletteDialogTest.error.empty())
+        throw std::runtime_error(paletteDialogTest.error);
+    if (!edited)
+        throw std::runtime_error("Editing a palette color was canceled unexpectedly.");
     editPaletteColor(0, *edited);
     if (app.palette[0] != *edited || app.palette.size() != 8)
         throw std::runtime_error("Editing a swatch did not replace it in place.");
@@ -5736,25 +6005,31 @@ void testPaletteTools()
     const HWND typing = app.textEdit;
     paletteDialogTest = {true, nullptr, {}};
     customColor(drivePaletteDialog);
-    if (!paletteDialogTest.error.empty()) throw std::runtime_error(paletteDialogTest.error);
+    if (!paletteDialogTest.error.empty())
+        throw std::runtime_error(paletteDialogTest.error);
     if (app.textEdit != typing || app.document.items[0].text != L"X")
         throw std::runtime_error("Canceling the picker interrupted text editing.");
     paletteDialogTest = {false, nullptr, {}};
     customColor(drivePaletteDialog);
-    if (!paletteDialogTest.error.empty()) throw std::runtime_error(paletteDialogTest.error);
+    if (!paletteDialogTest.error.empty())
+        throw std::runtime_error(paletteDialogTest.error);
     if (app.textEdit != typing || app.document.items[0].color != rgb(12, 34, 56))
-        throw std::runtime_error("Adding a palette color interrupted text editing or failed to recolor text.");
+        throw std::runtime_error(
+            "Adding a palette color interrupted text editing or failed to recolor text.");
     finishTextEditing();
     command(Undo);
     if (!app.document.items.empty())
-        throw std::runtime_error("Typing and palette recoloring did not remain one undoable text edit.");
+        throw std::runtime_error(
+            "Typing and palette recoloring did not remain one undoable text edit.");
     for (size_t count : {4U, 10U, 18U, 0U})
     {
-        while (app.palette.size() > count) deletePaletteColor(app.palette.size() - 1);
+        while (app.palette.size() > count)
+            deletePaletteColor(app.palette.size() - 1);
         while (app.palette.size() < count)
             addPaletteColor(rgb(static_cast<unsigned>(app.palette.size()), 67, 89));
         const auto expected = app.palette;
-        if (!saveToolPreferences()) throw std::runtime_error("Palette preferences could not be saved.");
+        if (!saveToolPreferences())
+            throw std::runtime_error("Palette preferences could not be saved.");
         app.palette.assign(Palette.begin(), Palette.end());
         loadToolPreferences();
         if (app.palette != expected || app.paletteDirty)
@@ -5765,15 +6040,19 @@ void testPaletteTools()
                 app.dpi = dpi;
                 app.tool = tool;
                 SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(850 * dpi),
-                    static_cast<int>(560 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                             static_cast<int>(560 * dpi),
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
                 buildButtons();
                 const auto formatting = toolbarLayout().formatting;
                 for (const auto &button : app.buttons)
                 {
-                    if (!paletteCommand(button.command) && button.command != CustomColor && button.command != Eyedropper)
+                    if (!paletteCommand(button.command) && button.command != CustomColor &&
+                        button.command != Eyedropper)
                         continue;
-                    if (button.rect.right >= formatting.left || button.rect.bottom >= canvasRect().top)
-                        throw std::runtime_error("Palette overlaps formatting controls or screenshot workspace.");
+                    if (button.rect.right >= formatting.left ||
+                        button.rect.bottom >= canvasRect().top)
+                        throw std::runtime_error(
+                            "Palette overlaps formatting controls or screenshot workspace.");
                 }
                 if (std::count_if(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
                         return paletteCommand(b.command);
@@ -5781,18 +6060,22 @@ void testPaletteTools()
                     throw std::runtime_error("Not every saved color has a visible toolbar swatch.");
                 if (count)
                 {
-                    const auto &button = *std::find_if(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
-                        return b.command == ColorFirst + static_cast<int>(count) - 1;
-                    });
+                    const auto &button =
+                        *std::find_if(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
+                            return b.command == ColorFirst + static_cast<int>(count) - 1;
+                        });
                     const auto point = MAKELPARAM(static_cast<int>((button.rect.left + 12) * dpi),
-                                                 static_cast<int>((button.rect.top + 12) * dpi));
+                                                  static_cast<int>((button.rect.top + 12) * dpi));
                     SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point);
                     SendMessageW(app.window, WM_LBUTTONUP, 0, point);
                     if (activeColor() != expected.back())
-                        throw std::runtime_error("Wrapped palette swatch selected the wrong color.");
+                        throw std::runtime_error(
+                            "Wrapped palette swatch selected the wrong color.");
                 }
                 if (count == 18 && tool == Tool::Text)
-                    saveBytes((L"palette-toolbar-" + std::to_wstring(static_cast<int>(dpi * 100)) + L".png").c_str(),
+                    saveBytes((L"palette-toolbar-" + std::to_wstring(static_cast<int>(dpi * 100)) +
+                               L".png")
+                                  .c_str(),
                               app.graphics.png(renderEditorPreview()));
             }
     }
@@ -5813,8 +6096,8 @@ void testPaletteTools()
     app.toolPreferencesDirty = false;
     releaseImage();
     SetWindowPos(app.window, nullptr, originalWindow.left, originalWindow.top,
-                 originalWindow.right - originalWindow.left, originalWindow.bottom - originalWindow.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalWindow.right - originalWindow.left,
+                 originalWindow.bottom - originalWindow.top, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 void testHighlightTool()
 {
@@ -5839,11 +6122,12 @@ void testHighlightTool()
     updateView();
     buildButtons();
     const auto button = std::find_if(app.buttons.begin(), app.buttons.end(),
-        [](const Button &b) { return b.command == HighlightTool; });
+                                     [](const Button &b) { return b.command == HighlightTool; });
     if (button == app.buttons.end() || !enabled(HighlightTool))
         throw std::runtime_error("Highlight toolbar control is missing.");
-    auto toolbarPoint = MAKELPARAM(static_cast<int>((button->rect.left + button->rect.right) / 2 * app.dpi),
-                                  static_cast<int>((button->rect.top + button->rect.bottom) / 2 * app.dpi));
+    auto toolbarPoint =
+        MAKELPARAM(static_cast<int>((button->rect.left + button->rect.right) / 2 * app.dpi),
+                   static_cast<int>((button->rect.top + button->rect.bottom) / 2 * app.dpi));
     SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, toolbarPoint);
     SendMessageW(app.window, WM_LBUTTONUP, 0, toolbarPoint);
     if (!active(HighlightTool) || activeColor() != Palette[2] || brushWidth() != 24)
@@ -5860,7 +6144,8 @@ void testHighlightTool()
     if (app.tool != Tool::Highlight || selected() || app.document.items.size() != 1 ||
         app.document.items[0].kind != Tool::Highlight || app.document.items[0].points.size() != 3 ||
         app.document.items[0].thickness != 24 || app.document.items[0].color != Palette[2])
-        throw std::runtime_error("Highlight drag did not create a persistent freehand chisel stroke.");
+        throw std::runtime_error(
+            "Highlight drag did not create a persistent freehand chisel stroke.");
     const auto drawn = app.document.items;
     const auto exported = renderedExport();
     if (!app.document.undo() || !app.document.items.empty() || !app.document.redo() ||
@@ -5880,7 +6165,8 @@ void testHighlightTool()
     changeColor(Palette[3]);
     if (app.document.items[0].color != Palette[3] ||
         app.colors[static_cast<size_t>(Tool::Highlight)] != Palette[3] ||
-        app.colors[static_cast<size_t>(Tool::Pen)] != originalColors[static_cast<size_t>(Tool::Pen)])
+        app.colors[static_cast<size_t>(Tool::Pen)] !=
+            originalColors[static_cast<size_t>(Tool::Pen)])
         throw std::runtime_error("Recoloring a highlight lost its preference or changed the pen.");
     selectTool(Tool::Pen);
     SendMessageW(app.window, WM_KEYDOWN, 'H', 0);
@@ -5928,7 +6214,8 @@ void testEraserTool()
     buildButtons();
     auto point = [&](Point p) {
         const auto screen = app.view.toScreen(p) * app.dpi;
-        return MAKELPARAM(static_cast<int>(std::lround(screen.x)), static_cast<int>(std::lround(screen.y)));
+        return MAKELPARAM(static_cast<int>(std::lround(screen.x)),
+                          static_cast<int>(std::lround(screen.y)));
     };
     auto click = [&](Point p) {
         SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point(p));
@@ -5936,10 +6223,10 @@ void testEraserTool()
         if (GetCapture() == app.window || app.document.editing() || app.drag != Drag::None)
             throw std::runtime_error("Eraser release left capture or history pending.");
     };
-    const auto found = std::find_if(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
-        return b.command == EraserTool;
-    });
-    if (found == app.buttons.end()) throw std::runtime_error("Eraser toolbar button is missing.");
+    const auto found = std::find_if(app.buttons.begin(), app.buttons.end(),
+                                    [](const Button &b) { return b.command == EraserTool; });
+    if (found == app.buttons.end())
+        throw std::runtime_error("Eraser toolbar button is missing.");
     const auto &button = *found;
     const auto toolbarPoint = MAKELPARAM(static_cast<int>((button.rect.left + 18) * app.dpi),
                                          static_cast<int>((button.rect.top + 18) * app.dpi));
@@ -5948,9 +6235,8 @@ void testEraserTool()
     if (!active(EraserTool) || active(SelectTool) || !enabled(EraserTool))
         throw std::runtime_error("Eraser toolbar button did not activate independently of Select.");
     buildButtons();
-    if (std::any_of(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
-            return b.command == SizeDown || b.command == SizeUp;
-        }))
+    if (std::any_of(app.buttons.begin(), app.buttons.end(),
+                    [](const Button &b) { return b.command == SizeDown || b.command == SizeUp; }))
         throw std::runtime_error("Whole-object eraser incorrectly offers stroke-size controls.");
     Annotation older;
     older.points = {{30, 100}, {150, 100}, {240, 140}};
@@ -5962,12 +6248,14 @@ void testEraserTool()
     const auto before = renderedExport();
     saveBytes(L"eraser-before.png", app.graphics.png(renderEditorPreview()));
     click({70, 100});
-    if (app.document.items != std::vector<Annotation>{keep} || !app.erasing || app.image.pixels !=
-            std::vector<uint8_t>(app.image.pixels.size(), 255))
-        throw std::runtime_error("Eraser did not remove the older whole stroke while keeping the newer stroke and screenshot.");
+    if (app.document.items != std::vector<Annotation>{keep} || !app.erasing ||
+        app.image.pixels != std::vector<uint8_t>(app.image.pixels.size(), 255))
+        throw std::runtime_error("Eraser did not remove the older whole stroke while keeping the "
+                                 "newer stroke and screenshot.");
     saveBytes(L"eraser-after.png", app.graphics.png(renderEditorPreview()));
     command(Undo);
-    if (app.document.items != std::vector<Annotation>{older, keep} || renderedExport().pixels != before.pixels)
+    if (app.document.items != std::vector<Annotation>{older, keep} ||
+        renderedExport().pixels != before.pixels)
         throw std::runtime_error("Undo erasing did not restore annotations/export pixels.");
     command(Redo);
     if (app.document.items != std::vector<Annotation>{keep})
@@ -5976,7 +6264,8 @@ void testEraserTool()
     const auto blankBefore = app.document.items;
     click({600, 330});
     if (app.document.items != blankBefore || !app.document.canRedo())
-        throw std::runtime_error("Erasing blank screenshot pixels changed annotations or cleared redo.");
+        throw std::runtime_error(
+            "Erasing blank screenshot pixels changed annotations or cleared redo.");
     Annotation newest = older;
     newest.color = Palette[3];
     app.document.clear();
@@ -6008,7 +6297,8 @@ void testEraserTool()
     SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point({70, 100}));
     SendMessageW(app.window, WM_MOUSEMOVE, MK_LBUTTON, point({550, 100}));
     SendMessageW(app.window, WM_KEYDOWN, VK_ESCAPE, 0);
-    if (app.document.items != sweep || app.drag != Drag::None || app.document.editing() || !app.erasing)
+    if (app.document.items != sweep || app.drag != Drag::None || app.document.editing() ||
+        !app.erasing)
         throw std::runtime_error("Esc did not restore a pending erase gesture.");
     SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point({70, 100}));
     ReleaseCapture();
@@ -6029,7 +6319,8 @@ void testEraserTool()
             app.document.clear();
             app.document.items = {item, keep};
             click(kind == Tool::Pen || kind == Tool::Highlight ? Point{100, 80}
-                : kind == Tool::Arrow ? item.arrowSpine(.5f) : Point{125, 85});
+                  : kind == Tool::Arrow                        ? item.arrowSpine(.5f)
+                                                               : Point{125, 85});
             if (app.document.items != std::vector<Annotation>{keep})
                 throw std::runtime_error("Eraser did not remove a complete annotation type/style.");
         }
@@ -6038,14 +6329,15 @@ void testEraserTool()
         app.dpi = dpi;
         for (int width : {850, 980, 1050})
         {
-            SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(width * dpi), static_cast<int>(700 * dpi),
-                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(width * dpi),
+                         static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             buildButtons();
             const auto layout = toolbarLayout();
             if (layout.draw.right >= layout.shapes.left)
                 throw std::runtime_error("Adding the eraser made the tool groups overlap.");
             for (const auto &b : app.buttons)
-                if (b.command == EraserTool && (b.rect.right > layout.draw.right || b.rect.left < layout.draw.left))
+                if (b.command == EraserTool &&
+                    (b.rect.right > layout.draw.right || b.rect.left < layout.draw.left))
                     throw std::runtime_error("Eraser did not fit inside the Draw group.");
         }
         for (float zoom : {.5f, 1.0f, 8.0f})
@@ -6058,8 +6350,10 @@ void testEraserTool()
             app.view.origin = screen - Point{70, 100} * app.view.scale;
             app.document.clear();
             app.document.items = {older, keep};
-            if (editorCursor(screen) != currentEraserCursor() || currentEraserCursor() != app.eraserCursor)
-                throw std::runtime_error("Eraser cursor was not shown or cached across zoom levels.");
+            if (editorCursor(screen) != currentEraserCursor() ||
+                currentEraserCursor() != app.eraserCursor)
+                throw std::runtime_error(
+                    "Eraser cursor was not shown or cached across zoom levels.");
             click({70, 100});
             if (app.document.items != std::vector<Annotation>{keep})
                 throw std::runtime_error("Eraser hit testing failed at scaled DPI/zoom.");
@@ -6068,11 +6362,14 @@ void testEraserTool()
         updateView();
     }
     SendMessageW(app.window, WM_KEYDOWN, 'E', 0);
-    if (app.erasing) throw std::runtime_error("E did not toggle eraser off.");
+    if (app.erasing)
+        throw std::runtime_error("E did not toggle eraser off.");
     SendMessageW(app.window, WM_KEYDOWN, 'E', 0);
-    if (!app.erasing) throw std::runtime_error("E did not select eraser.");
+    if (!app.erasing)
+        throw std::runtime_error("E did not select eraser.");
     command(PenTool);
-    if (app.erasing || !active(PenTool)) throw std::runtime_error("Selecting Pen did not leave eraser mode.");
+    if (app.erasing || !active(PenTool))
+        throw std::runtime_error("Selecting Pen did not leave eraser mode.");
     app.dpi = originalDpi;
     app.exportOptions = originalOptions;
     app.colors = originalColors;
@@ -6080,8 +6377,8 @@ void testEraserTool()
     releaseImage();
     selectTool(originalTool);
     SetWindowPos(app.window, nullptr, originalBounds.left, originalBounds.top,
-                 originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.right - originalBounds.left,
+                 originalBounds.bottom - originalBounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     buildButtons();
 }
 void testCurvedArrowControls()
@@ -6109,7 +6406,7 @@ void testCurvedArrowControls()
     auto button = [&](int id) -> Rect {
         buildButtons();
         const auto found = std::find_if(app.buttons.begin(), app.buttons.end(),
-            [&](const Button &b) { return b.command == id; });
+                                        [&](const Button &b) { return b.command == id; });
         if (found == app.buttons.end() || !enabled(id))
             throw std::runtime_error("Curved arrow selection control is missing or disabled.");
         return found->rect;
@@ -6118,7 +6415,7 @@ void testCurvedArrowControls()
     {
         app.dpi = dpi;
         SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(1000 * dpi),
-            static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                     static_cast<int>(700 * dpi), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         selectTool(Tool::Select);
         for (float zoom : {.5f, 1.0f, 8.0f})
         {
@@ -6136,13 +6433,14 @@ void testCurvedArrowControls()
             {
                 app.document.selected = 0;
                 const Rect r = button(FlipCurvedArrow);
-                if (std::count_if(app.buttons.begin(), app.buttons.end(),
-                    [](const Button &b) { return curvedArrowCommand(b.command); }) != 1)
+                if (std::count_if(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
+                        return curvedArrowCommand(b.command);
+                    }) != 1)
                     throw std::runtime_error("Curved arrow must show a single Flip control.");
                 if (!canvas.contains({r.left, r.top}) || !canvas.contains({r.right, r.bottom}))
                     throw std::runtime_error("Curved arrow controls escaped the canvas.");
                 const auto click = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * dpi),
-                    static_cast<int>((r.top + r.bottom) / 2 * dpi));
+                                              static_cast<int>((r.top + r.bottom) / 2 * dpi));
                 SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, click);
                 // Real painting between press and release must retain the button hit target.
                 UpdateWindow(app.window);
@@ -6151,20 +6449,24 @@ void testCurvedArrowControls()
                     app.document.items[0].a != curved.a || app.document.items[0].b != curved.b ||
                     app.document.selected != 0 || app.drag != Drag::None || app.pressed ||
                     GetCapture() == app.window || app.document.editing())
-                    throw std::runtime_error("Curved arrow click changed the wrong object or left an edit pending.");
+                    throw std::runtime_error(
+                        "Curved arrow click changed the wrong object or left an edit pending.");
                 const auto changed = app.document.items;
                 const auto exportedAfter = renderedExport();
                 if (exportedBefore.pixels == exportedAfter.pixels ||
                     previewImage().pixels != exportedAfter.pixels ||
-                    app.graphics.decode(app.graphics.png(exportedAfter)).pixels != exportedAfter.pixels ||
+                    app.graphics.decode(app.graphics.png(exportedAfter)).pixels !=
+                        exportedAfter.pixels ||
                     !changed[0].hit(changed[0].arrowSpine(.5f), 0))
-                    throw std::runtime_error("Curved arrow direction did not update preview, export or hit testing.");
+                    throw std::runtime_error(
+                        "Curved arrow direction did not update preview, export or hit testing.");
                 command(Undo);
-                if (app.document.items != before || renderedExport().pixels != exportedBefore.pixels ||
-                    app.document.canUndo())
+                if (app.document.items != before ||
+                    renderedExport().pixels != exportedBefore.pixels || app.document.canUndo())
                     throw std::runtime_error("Curved arrow action did not undo in one step.");
                 command(Redo);
-                if (app.document.items != changed || renderedExport().pixels != exportedAfter.pixels)
+                if (app.document.items != changed ||
+                    renderedExport().pixels != exportedAfter.pixels)
                     throw std::runtime_error("Curved arrow redo did not restore exported pixels.");
                 command(Undo);
             }
@@ -6181,8 +6483,9 @@ void testCurvedArrowControls()
                 app.document.selected = selection;
                 buildButtons();
                 if (std::any_of(app.buttons.begin(), app.buttons.end(),
-                    [](const Button &b) { return curvedArrowCommand(b.command); }))
-                    throw std::runtime_error("Curved arrow controls appeared for another selection.");
+                                [](const Button &b) { return curvedArrowCommand(b.command); }))
+                    throw std::runtime_error(
+                        "Curved arrow controls appeared for another selection.");
                 const auto unchanged = app.document.items;
                 command(FlipCurvedArrow);
                 if (app.document.items != unchanged)
@@ -6202,21 +6505,22 @@ void testCurvedArrowControls()
     underControl.b = app.view.toImage({r.right, r.bottom});
     app.document.items.push_back(underControl);
     const auto doubleClick = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * app.dpi),
-        static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
+                                        static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
     SendMessageW(app.window, WM_LBUTTONDBLCLK, MK_LBUTTON, doubleClick);
     SendMessageW(app.window, WM_LBUTTONUP, 0, doubleClick);
     if (app.textEdit || app.document.selected != 0 || app.document.items[0] == curved ||
         app.document.items[2] != underControl)
         throw std::runtime_error("Double-clicking a curved arrow control edited underlying text.");
-    if (app.colors != colors || app.styles != styles || app.toolPreferencesDirty != preferencesDirty)
+    if (app.colors != colors || app.styles != styles ||
+        app.toolPreferencesDirty != preferencesDirty)
         throw std::runtime_error("Curved arrow controls changed future tool preferences.");
     releaseImage();
     app.exportOptions = originalOptions;
     app.tool = originalTool;
     app.dpi = originalDpi;
     SetWindowPos(app.window, nullptr, originalBounds.left, originalBounds.top,
-        originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
-        SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.right - originalBounds.left,
+                 originalBounds.bottom - originalBounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     buildButtons();
 }
 void testRecentSnips()
@@ -6231,7 +6535,10 @@ void testRecentSnips()
     app.recentSequence = 0;
     app.exportOptions = {};
     app.collapsedRows = 0;
-    auto require = [](bool ok, const char *message) { if (!ok) throw std::runtime_error(message); };
+    auto require = [](bool ok, const char *message) {
+        if (!ok)
+            throw std::runtime_error(message);
+    };
     auto capture = [&](int number, int width = 640, int height = 360) {
         auto image = Bitmap::create(width, height);
         for (int y = 0; y < height; ++y)
@@ -6255,11 +6562,12 @@ void testRecentSnips()
     auto click = [&](int id, bool cancel = false) {
         buildButtons();
         const auto found = std::find_if(app.buttons.begin(), app.buttons.end(),
-            [&](const Button &b) { return b.command == id; });
-        require(found != app.buttons.end() && enabled(id), "Recent snip mouse control is unavailable.");
+                                        [&](const Button &b) { return b.command == id; });
+        require(found != app.buttons.end() && enabled(id),
+                "Recent snip mouse control is unavailable.");
         const auto r = found->rect;
         const auto point = MAKELPARAM(static_cast<int>((r.left + r.right) / 2 * app.dpi),
-            static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
+                                      static_cast<int>((r.top + r.bottom) / 2 * app.dpi));
         SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, point);
         UpdateWindow(app.window);
         SendMessageW(app.window, WM_LBUTTONUP, 0, cancel ? MAKELPARAM(2, 2) : point);
@@ -6276,7 +6584,8 @@ void testRecentSnips()
     SendMessageW(app.textEdit, WM_CHAR, 'X', 0);
     click(RecentSnips);
     require(!app.textEdit && app.document.items.size() == 1 && app.document.items[0].text == L"X" &&
-            !app.recent[0].thumbnail.empty(), "Opening Recent did not commit text and refresh its thumbnail.");
+                !app.recent[0].thumbnail.empty(),
+            "Opening Recent did not commit text and refresh its thumbnail.");
     click(RecentClose);
     applyCrop({40, 40, 600, 300});
     app.fit = false;
@@ -6302,15 +6611,18 @@ void testRecentSnips()
     click(RecentSnips);
     click(RecentChoiceFirst);
     require(app.activeRecent == 0 && app.document.items == firstItems && app.image.width == 560 &&
-            app.savePath == L"recent-first.png" && app.dirty && app.view.scale == firstView.scale &&
-            app.view.origin == firstView.origin && renderedExport().pixels == firstPixels,
+                app.savePath == L"recent-first.png" && app.dirty &&
+                app.view.scale == firstView.scale && app.view.origin == firstView.origin &&
+                renderedExport().pixels == firstPixels,
             "Switching captures lost text, crop, save path, dirty state, zoom, or export pixels.");
     command(Undo);
-    require(app.image.pixels == original && app.document.items[0].a == Point{50, 70} && app.document.canRedo(),
+    require(app.image.pixels == original && app.document.items[0].a == Point{50, 70} &&
+                app.document.canRedo(),
             "A restored capture lost its crop source or undo history.");
     click(RecentSnips);
     click(RecentChoiceFirst + 1);
-    require(app.savePath == L"recent-second.png" && !app.dirty && renderedExport().pixels == secondPixels,
+    require(app.savePath == L"recent-second.png" && !app.dirty &&
+                renderedExport().pixels == secondPixels,
             "A saved capture changed when reopened.");
     restoreRecentSnip(0);
     require(app.document.canRedo(), "Switching snips discarded redo history.");
@@ -6321,11 +6633,13 @@ void testRecentSnips()
     require(app.document.items.empty(), "Annotation history leaked across captures.");
     command(Redo);
     command(Redo);
-    require(renderedExport().pixels == firstPixels, "Restored annotation/crop history did not round trip.");
+    require(renderedExport().pixels == firstPixels,
+            "Restored annotation/crop history did not round trip.");
     const auto count = app.recent.size();
     startSnip(true);
     cancelCapture();
-    require(app.recent.size() == count && app.activeRecent == 0 && renderedExport().pixels == firstPixels,
+    require(app.recent.size() == count && app.activeRecent == 0 &&
+                renderedExport().pixels == firstPixels,
             "Canceling a capture changed the session collection or active snip.");
     const auto savedCount = app.recent.size();
     SendMessageW(app.window, WM_CLOSE, 0, 0);
@@ -6335,39 +6649,48 @@ void testRecentSnips()
     click(RecentSnips);
     click(RecentChoiceFirst);
     require(renderedExport().pixels == firstPixels, "Reopening from the tray lost edited pixels.");
-    for (int n = 3; n <= 11; ++n) acceptCapture(capture(n));
-    require(app.recent.size() == 10 && app.recent.front().sequence == 2 && app.recent.back().sequence == 11,
+    for (int n = 3; n <= 11; ++n)
+        acceptCapture(capture(n));
+    require(app.recent.size() == 10 && app.recent.front().sequence == 2 &&
+                app.recent.back().sequence == 11,
             "The 11th capture did not evict exactly the oldest snip.");
     restoreRecentSnip(0);
     require(renderedExport().pixels == secondPixels && app.recent.front().sequence == 2,
             "Revisiting the oldest snip changed its edits or capture order.");
     acceptCapture(capture(12));
-    require(app.recent.size() == 10 && app.recent.front().sequence == 3 && app.recent.back().sequence == 12,
+    require(app.recent.size() == 10 && app.recent.front().sequence == 3 &&
+                app.recent.back().sequence == 12,
             "Capturing while viewing the oldest snip evicted the wrong entry.");
     for (float scale : {1.0f, 1.5f, 2.0f})
         for (int width : {1000, 850})
         {
             app.dpi = scale;
             SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(width * scale),
-                static_cast<int>((width == 850 ? 430 : 700) * scale), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                         static_cast<int>((width == 850 ? 430 : 700) * scale),
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             command(RecentSnips);
             require(app.recentOpen, "Recent button did not reopen.");
             const auto panel = recentPanelRect(), client = clientDips();
             require(panel.left >= 0 && panel.top >= 0 && panel.right <= client.right &&
-                    panel.bottom <= client.bottom - StatusHeight, "Recent popup escaped a small/DPI-scaled window.");
+                        panel.bottom <= client.bottom - StatusHeight,
+                    "Recent popup escaped a small/DPI-scaled window.");
             const auto scaleBefore = app.view.scale;
-            POINT wheelPoint{static_cast<LONG>((panel.left + 30) * scale), static_cast<LONG>((panel.top + 60) * scale)};
+            POINT wheelPoint{static_cast<LONG>((panel.left + 30) * scale),
+                             static_cast<LONG>((panel.top + 60) * scale)};
             ClientToScreen(app.window, &wheelPoint);
             SendMessageW(app.window, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)),
-                MAKELPARAM(wheelPoint.x, wheelPoint.y));
-            require(app.view.scale == scaleBefore, "Scrolling Recent zoomed the screenshot beneath it.");
-            saveBytes(L"recent-panel-" + std::to_wstring(width) + L"-" + std::to_wstring(static_cast<int>(scale * 100)) + L".png",
+                         MAKELPARAM(wheelPoint.x, wheelPoint.y));
+            require(app.view.scale == scaleBefore,
+                    "Scrolling Recent zoomed the screenshot beneath it.");
+            saveBytes(L"recent-panel-" + std::to_wstring(width) + L"-" +
+                          std::to_wstring(static_cast<int>(scale * 100)) + L".png",
                       app.graphics.png(renderEditorPreview()));
             processKey(VK_END);
             require(app.recentFocus == 9 && app.recentScroll + recentVisibleRows() >= 5,
                     "Keyboard navigation could not reach the oldest thumbnail.");
             processKey(VK_RETURN);
-            require(app.activeRecent == 0 && !app.recentOpen, "Keyboard selection opened the wrong snip.");
+            require(app.activeRecent == 0 && !app.recentOpen,
+                    "Keyboard selection opened the wrong snip.");
             command(RecentSnips);
             processKey(VK_ESCAPE);
             require(!app.recentOpen && app.activeRecent == 0, "Esc changed the active capture.");
@@ -6388,15 +6711,15 @@ void testRecentSnips()
                 command(RecentSnips);
                 const auto popup = recentPanelRect();
                 require(popup.bottom <= clientDips().bottom - StatusHeight,
-                    "Collapsed rows pushed Recent out of a compact window.");
+                        "Collapsed rows pushed Recent out of a compact window.");
                 processKey(VK_ESCAPE);
             }
             app.collapsedRows = 0;
         }
     app.dpi = dpi;
     app.collapsedRows = collapsed;
-    SetWindowPos(app.window, nullptr, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
-        SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(app.window, nullptr, bounds.left, bounds.top, bounds.right - bounds.left,
+                 bounds.bottom - bounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     BYTE keyboard[256]{}, restoreKeyboard[256]{};
     GetKeyboardState(restoreKeyboard);
     std::copy(std::begin(restoreKeyboard), std::end(restoreKeyboard), std::begin(keyboard));
@@ -6425,24 +6748,32 @@ void testRecentSnips()
         restoreRecentSnip(i % 10);
         UpdateWindow(app.window);
     }
-    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-    std::string timings = "Mean switch and paint (640x360, software): " + std::to_string(elapsed / 20) + " ms\n";
+    const auto elapsed =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+            .count();
+    std::string timings =
+        "Mean switch and paint (640x360, software): " + std::to_string(elapsed / 20) + " ms\n";
     for (const auto &snip : app.recent)
         require(snip.thumbnail.width <= 400 && snip.thumbnail.height <= 224,
                 "Recent thumbnails retained full-size render buffers.");
     std::ifstream saved(std::filesystem::path(L"recent-second.png"), std::ios::binary);
-    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(saved), std::istreambuf_iterator<char>()};
-    require(app.graphics.decode(bytes).pixels == secondPixels, "Saved PNG differed from the restored snip export.");
+    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(saved),
+                                     std::istreambuf_iterator<char>()};
+    require(app.graphics.decode(bytes).pixels == secondPixels,
+            "Saved PNG differed from the restored snip export.");
     releaseImage();
     app.recent.clear();
-    for (int n = 0; n < 3; ++n) acceptCapture(capture(20 + n, 3840, 2160));
+    for (int n = 0; n < 3; ++n)
+        acceptCapture(capture(20 + n, 3840, 2160));
     std::vector<double> switches;
     for (int n = 0; n < 9; ++n)
     {
         const auto start = std::chrono::steady_clock::now();
         restoreRecentSnip(n % 3);
         UpdateWindow(app.window);
-        switches.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        switches.push_back(
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count());
     }
     std::sort(switches.begin(), switches.end());
     timings += "4K switch and paint (software), median: " + std::to_string(switches[4]) +
@@ -6455,8 +6786,12 @@ void testRecentSnips()
         repaint();
         UpdateWindow(app.window);
     }
-    timings += "Mean cached popup repaint (software): " + std::to_string(
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - popupStart).count() / 10) + " ms\n";
+    timings += "Mean cached popup repaint (software): " +
+               std::to_string(std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - popupStart)
+                                  .count() /
+                              10) +
+               " ms\n";
     writeTestReport(L"recent-timings.txt", timings);
     releaseImage();
     app.recent.clear();
@@ -6491,7 +6826,8 @@ void testCropTool()
     const auto originalExport = renderedExport();
     applyCrop({100, 80, 400, 280});
     if (app.image.pixels != original.crop(100, 80, 300, 200).pixels ||
-        app.document.items[0].a != Point{10, 30} || app.document.cropBounds != Rect{100, 80, 400, 280})
+        app.document.items[0].a != Point{10, 30} ||
+        app.document.cropBounds != Rect{100, 80, 400, 280})
         throw std::runtime_error("Editor crop changed screenshot pixels or misplaced annotations.");
     const auto firstExport = renderedExport();
     applyCrop({20, 10, 180, 120});
@@ -6529,15 +6865,18 @@ void testCropTool()
         SendMessageW(app.window, WM_LBUTTONDOWN, MK_LBUTTON, a);
         SendMessageW(app.window, WM_MOUSEMOVE, MK_LBUTTON, b);
         if (app.drag != Drag::Crop || !active(CropTool))
-            throw std::runtime_error("Crop tool did not begin a reverse-direction mouse selection.");
+            throw std::runtime_error(
+                "Crop tool did not begin a reverse-direction mouse selection.");
         if (scale == 1)
             saveBytes(L"smoke-test-crop-selection.png", app.graphics.png(renderEditorPreview()));
         SendMessageW(app.window, WM_LBUTTONUP, 0, b);
-        if (app.cropping || !app.document.cropBounds || app.image.width < 279 || app.image.width > 282 ||
-            app.image.height < 169 || app.image.height > 172)
-            throw std::runtime_error("Mouse crop dimensions failed at scaled DPI " + std::to_string(scale) +
-                ": " + std::to_string(app.image.width) + "x" + std::to_string(app.image.height));
-        if (app.graphics.decode(app.graphics.png(renderedExport())).pixels != renderedExport().pixels)
+        if (app.cropping || !app.document.cropBounds || app.image.width < 279 ||
+            app.image.width > 282 || app.image.height < 169 || app.image.height > 172)
+            throw std::runtime_error(
+                "Mouse crop dimensions failed at scaled DPI " + std::to_string(scale) + ": " +
+                std::to_string(app.image.width) + "x" + std::to_string(app.image.height));
+        if (app.graphics.decode(app.graphics.png(renderedExport())).pixels !=
+            renderedExport().pixels)
             throw std::runtime_error("Cropped PNG export changed pixels.");
         command(Undo);
         command(CropTool);
@@ -6552,15 +6891,16 @@ void testCropTool()
     app.exportOptions = options;
     releaseImage();
     SetWindowPos(app.window, nullptr, originalBounds.left, originalBounds.top,
-                 originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.right - originalBounds.left,
+                 originalBounds.bottom - originalBounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     buildButtons();
 }
 void testCaptureShortcuts()
 {
     const WORD area = MAKEWORD(VK_F20, HOTKEYF_CONTROL | HOTKEYF_ALT);
     const WORD full = MAKEWORD(VK_F21, HOTKEYF_CONTROL | HOTKEYF_ALT);
-    if (!registerShortcuts(area, full, false) || !app.hotkeyRegistered || !app.instantHotkeyRegistered)
+    if (!registerShortcuts(area, full, false) || !app.hotkeyRegistered ||
+        !app.instantHotkeyRegistered)
         throw std::runtime_error("Independent capture shortcuts could not be registered.");
     if (registerShortcuts(area, area, false) || app.hotkey != area || app.instantHotkey != full)
         throw std::runtime_error("Duplicate shortcut settings replaced the working bindings.");
@@ -6571,30 +6911,36 @@ void testCaptureShortcuts()
         throw std::runtime_error("Cannot reserve conflicting shortcut test fixture.");
     const bool accepted = registerShortcuts(area, blocked, false);
     UnregisterHotKey(app.window, 90);
-    if (accepted || app.hotkey != full || app.instantHotkey != area ||
-        !app.hotkeyRegistered || !app.instantHotkeyRegistered)
+    if (accepted || app.hotkey != full || app.instantHotkey != area || !app.hotkeyRegistered ||
+        !app.instantHotkeyRegistered)
         throw std::runtime_error("Shortcut conflict did not restore both working bindings.");
-    const bool areaAvailable = RegisterHotKey(app.window, 91, hotkeyModifiers(full), LOBYTE(full)) != FALSE;
-    const bool fullAvailable = RegisterHotKey(app.window, 92, hotkeyModifiers(area), LOBYTE(area)) != FALSE;
-    if (areaAvailable) UnregisterHotKey(app.window, 91);
-    if (fullAvailable) UnregisterHotKey(app.window, 92);
+    const bool areaAvailable =
+        RegisterHotKey(app.window, 91, hotkeyModifiers(full), LOBYTE(full)) != FALSE;
+    const bool fullAvailable =
+        RegisterHotKey(app.window, 92, hotkeyModifiers(area), LOBYTE(area)) != FALSE;
+    if (areaAvailable)
+        UnregisterHotKey(app.window, 91);
+    if (fullAvailable)
+        UnregisterHotKey(app.window, 92);
     if (areaAvailable || fullAvailable)
         throw std::runtime_error("Rollback lost a Windows shortcut registration.");
-    if (!registerShortcuts(0, area, false) || app.hotkeyRegistered || !app.instantHotkeyRegistered ||
-        !registerShortcuts(full, 0, false) || !app.hotkeyRegistered || app.instantHotkeyRegistered ||
-        !registerShortcuts(0, 0, false))
+    if (!registerShortcuts(0, area, false) || app.hotkeyRegistered ||
+        !app.instantHotkeyRegistered || !registerShortcuts(full, 0, false) ||
+        !app.hotkeyRegistered || app.instantHotkeyRegistered || !registerShortcuts(0, 0, false))
         throw std::runtime_error("Disabling either capture shortcut independently failed.");
     if (!registerShortcuts(area, VK_PAUSE, false) || !app.instantHotkeyRegistered ||
-        hotkeyName(app.instantHotkey) != L"Pause" ||
-        registerShortcuts(area, 'P', false) || registerShortcuts(area, VK_F12, false) ||
-        app.instantHotkey != VK_PAUSE || !registerShortcuts(0, 0, false))
-        throw std::runtime_error("Standalone Pause shortcut or ordinary/reserved-key validation failed.");
+        hotkeyName(app.instantHotkey) != L"Pause" || registerShortcuts(area, 'P', false) ||
+        registerShortcuts(area, VK_F12, false) || app.instantHotkey != VK_PAUSE ||
+        !registerShortcuts(0, 0, false))
+        throw std::runtime_error(
+            "Standalone Pause shortcut or ordinary/reserved-key validation failed.");
 }
 void testShortcutFields()
 {
     testCaptureShortcuts();
-    app.hotkey = static_cast<WORD>(GetPrivateProfileIntW(L"Settings", L"Hotkey", 0, app.iniPath.c_str()));
-    app.instantHotkey = static_cast<WORD>(GetPrivateProfileIntW(L"Settings", L"InstantHotkey", 0, app.iniPath.c_str()));
+    app.hotkey = static_cast<WORD>(preferenceUInt(app.iniPath, L"Settings", L"Hotkey", 0));
+    app.instantHotkey =
+        static_cast<WORD>(preferenceUInt(app.iniPath, L"Settings", L"InstantHotkey", 0));
     openSettings();
     auto expectLabel = [&](WORD key) {
         wchar_t label[128]{};
@@ -6617,13 +6963,18 @@ void testShortcutFields()
     openSettings();
     expectLabel(app.instantHotkey);
     SendMessageW(app.instantHotkeyControl, WM_KEYDOWN, VK_PAUSE, (0x45 << 16) | 1);
-    SendMessageW(app.hotkeyControl, HKM_SETHOTKEY, MAKEWORD(VK_F20, HOTKEYF_CONTROL | HOTKEYF_ALT), 0);
+    SendMessageW(app.hotkeyControl, HKM_SETHOTKEY, MAKEWORD(VK_F20, HOTKEYF_CONTROL | HOTKEYF_ALT),
+                 0);
     SendMessageW(app.settingsWindow, WM_COMMAND, IDOK, 0);
     if (app.settingsWindow || app.instantHotkey != VK_PAUSE ||
-        GetPrivateProfileIntW(L"Settings", L"InstantHotkey", 0, app.iniPath.c_str()) != VK_PAUSE)
+        preferenceUInt(app.iniPath, L"Settings", L"InstantHotkey", 0) != VK_PAUSE)
         throw std::runtime_error("Pause shortcut settings did not save.");
     INPUT input[2]{};
-    for (auto &event : input) { event.type = INPUT_KEYBOARD; event.ki.wVk = VK_PAUSE; }
+    for (auto &event : input)
+    {
+        event.type = INPUT_KEYBOARD;
+        event.ki.wVk = VK_PAUSE;
+    }
     input[1].ki.dwFlags = KEYEVENTF_KEYUP;
     if (SendInput(2, input, sizeof(INPUT)) != 2)
         throw std::runtime_error("Windows rejected Pause input.");
@@ -6660,7 +7011,8 @@ void testNavigation(HWND window)
     RECT originalBounds{};
     GetWindowRect(window, &originalBounds);
     auto require = [](bool condition, const char *message) {
-        if (!condition) throw std::runtime_error(message);
+        if (!condition)
+            throw std::runtime_error(message);
     };
     app.document.clear();
     app.exportOptions = {};
@@ -6698,17 +7050,20 @@ void testNavigation(HWND window)
     };
     auto cursorPreview = Bitmap::create(288, 144);
     std::fill(cursorPreview.pixels.begin(), cursorPreview.pixels.end(), 240);
-    for (size_t i = 3; i < cursorPreview.pixels.size(); i += 4) cursorPreview.pixels[i] = 255;
+    for (size_t i = 3; i < cursorPreview.pixels.size(); i += 4)
+        cursorPreview.pixels[i] = 255;
     int cursorColumn = 0;
     for (float d : {1.0f, 1.5f, 2.0f})
     {
         SetWindowPos(window, nullptr, 0, 0, static_cast<int>(1000 * d), static_cast<int>(700 * d),
                      SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         app.dpi = d;
-        if (app.target) app.target->SetDpi(d * 96, d * 96);
+        if (app.target)
+            app.target->SetDpi(d * 96, d * 96);
         command(Fit);
         const auto minimum = app.view.scale;
-        require(minimum * d < 1 && !canPanImage(), "Fitted minimum failed to show the whole large screenshot.");
+        require(minimum * d < 1 && !canPanImage(),
+                "Fitted minimum failed to show the whole large screenshot.");
         requireCentered();
         wheel(center(), -120);
         require(app.fit && app.view.scale == minimum, "Wheel zoomed below the fitted minimum.");
@@ -6722,8 +7077,10 @@ void testNavigation(HWND window)
         const Point roundedAnchor{std::round(anchor.x * d) / d, std::round(anchor.y * d) / d};
         require(length(app.view.toImage(roundedAnchor) - focus) < 2,
                 "Zoom failed to keep the pointer's image detail in place.");
-        require(editorCursor(center()) == currentGrabCursor(false), "Select did not show the open hand cursor.");
-        require(app.grabCursor[0] && currentGrabCursor(true) != app.grabCursor[0] && app.grabCursor[1],
+        require(editorCursor(center()) == currentGrabCursor(false),
+                "Select did not show the open hand cursor.");
+        require(app.grabCursor[0] && currentGrabCursor(true) != app.grabCursor[0] &&
+                    app.grabCursor[1],
                 "Native open/closed hand cursors were not created.");
         for (int row = 0; row < 2; ++row)
             cursorPreview = compositeCursor(cursorPreview, currentGrabCursor(row != 0),
@@ -6743,9 +7100,9 @@ void testNavigation(HWND window)
             updateView();
             const auto r = navigationRect(), content = imageContentRect();
             require(app.view.toScreen({content.left, content.top}).x <= r.left + .02f &&
-                    app.view.toScreen({content.right, content.bottom}).x >= r.right - .02f &&
-                    app.view.toScreen({content.left, content.top}).y <= r.top + .02f &&
-                    app.view.toScreen({content.right, content.bottom}).y >= r.bottom - .02f,
+                        app.view.toScreen({content.right, content.bottom}).x >= r.right - .02f &&
+                        app.view.toScreen({content.left, content.top}).y <= r.top + .02f &&
+                        app.view.toScreen({content.right, content.bottom}).y >= r.bottom - .02f,
                     "Panning exposed space past a screenshot edge.");
         }
         zoomAt(center(), 1000);
@@ -6758,7 +7115,8 @@ void testNavigation(HWND window)
         SendMessageW(window, WM_MBUTTONDOWN, MK_MBUTTON, mouse(center()));
         SendMessageW(window, WM_MOUSEMOVE, MK_MBUTTON, mouse(center() + Point{100, 50}));
         SendMessageW(window, WM_MBUTTONUP, 0, mouse(center()));
-        require(length(app.view.origin - beforeDrag) < .001f, "A fitting image could be dragged off center.");
+        require(length(app.view.origin - beforeDrag) < .001f,
+                "A fitting image could be dragged off center.");
         // Annotation hit targets and resize handles take priority over panning.
         zoomAt(center(), 4);
         Annotation item;
@@ -6793,22 +7151,25 @@ void testNavigation(HWND window)
     }
     app.dpi = originalDpi;
     saveBytes(L"navigation-test-hand-cursors.png", app.graphics.png(cursorPreview));
-    if (app.target) app.target->SetDpi(app.dpi * 96, app.dpi * 96);
+    if (app.target)
+        app.target->SetDpi(app.dpi * 96, app.dpi * 96);
     SetWindowPos(window, nullptr, originalBounds.left, originalBounds.top,
-                 originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.right - originalBounds.left,
+                 originalBounds.bottom - originalBounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     command(Fit);
     saveBytes(L"navigation-test-fit.png", app.graphics.png(renderEditorPreview()));
     const float smallScale = app.view.scale;
     command(FullScreen);
-    require(app.fit && app.view.scale > smallScale, "Full screen did not increase the fitted scale.");
+    require(app.fit && app.view.scale > smallScale,
+            "Full screen did not increase the fitted scale.");
     requireCentered();
     saveBytes(L"navigation-test-full-screen.png", app.graphics.png(renderEditorPreview()));
     command(FullScreen);
     zoomAt(center(), 5);
     const auto focusBeforeResize = app.view.toImage(center());
     SetWindowPos(window, nullptr, 0, 0, originalBounds.right - originalBounds.left + 80,
-                 originalBounds.bottom - originalBounds.top + 40, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.bottom - originalBounds.top + 40,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     updateView();
     require(length(app.view.toImage(center()) - focusBeforeResize) < .1f,
             "Resizing a zoomed view lost the visible image detail.");
@@ -6816,8 +7177,8 @@ void testNavigation(HWND window)
     require(app.document.items.empty() && renderedExport().pixels == originalPixels.pixels,
             "Navigation changed screenshot or export pixels.");
     SetWindowPos(window, nullptr, originalBounds.left, originalBounds.top,
-                 originalBounds.right - originalBounds.left, originalBounds.bottom - originalBounds.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 originalBounds.right - originalBounds.left,
+                 originalBounds.bottom - originalBounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
     app.image = originalImage;
     app.document = originalDocument;
     app.exportOptions = originalOptions;
@@ -6843,11 +7204,13 @@ void runResizeTest(HWND window)
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
-            MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(until - std::min(until, GetTickCount64())),
-                                       QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            MsgWaitForMultipleObjectsEx(
+                0, nullptr, static_cast<DWORD>(until - std::min(until, GetTickCount64())),
+                QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
     };
-    std::string report = std::string(app.softwareRendering ? "Software" : "Hardware/default") +
+    std::string report =
+        std::string(app.softwareRendering ? "Software" : "Hardware/default") +
         " resize benchmark (milliseconds, " + std::to_string(samples) + " samples per case; " +
         (app.resizeTestIdle ? "350ms message-pumped idle between operations; " : "") +
         "synthetic snip; clipboard untouched)\n";
@@ -6903,19 +7266,22 @@ void runResizeTest(HWND window)
                 else if (operation == 1)
                     ShowWindow(window, i % 2 ? SW_RESTORE : SW_MAXIMIZE);
                 else
-                    SetWindowPos(window, nullptr, 0, 0,
-                        i % 2 ? std::min(width, 1050) : width,
-                        i % 2 ? std::min(height, 740) : height,
-                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    SetWindowPos(window, nullptr, 0, 0, i % 2 ? std::min(width, 1050) : width,
+                                 i % 2 ? std::min(height, 740) : height,
+                                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
                 if (app.resizeTestPaints == paintsBefore)
-                    throw std::runtime_error("Resize returned before painting the new editor layout.");
+                    throw std::runtime_error(
+                        "Resize returned before painting the new editor layout.");
                 if (operation == 2 && bool(IsZoomed(window)) == wasMaximized)
-                    throw std::runtime_error("Title-bar double-click did not toggle maximize/restore.");
-                if (scenario && (!app.previewValid || app.previewImage.pixels.data() != cachedPixels))
+                    throw std::runtime_error(
+                        "Title-bar double-click did not toggle maximize/restore.");
+                if (scenario &&
+                    (!app.previewValid || app.previewImage.pixels.data() != cachedPixels))
                     throw std::runtime_error("Resizing unnecessarily recomposed the screenshot.");
                 if (app.workspaceBrush.get() != cachedPattern ||
                     (scenario && app.displayBitmap.get() != cachedDisplay))
-                    throw std::runtime_error("Resizing unnecessarily recreated cached drawing resources.");
+                    throw std::runtime_error(
+                        "Resizing unnecessarily recreated cached drawing resources.");
                 if (scenario)
                 {
                     const auto canvas = canvasRect();
@@ -6927,9 +7293,11 @@ void runResizeTest(HWND window)
                         bottom > canvas.bottom ||
                         std::abs(origin.x + right - canvas.left - canvas.right) > .1f ||
                         std::abs(origin.y + bottom - canvas.top - canvas.bottom) > .1f)
-                        throw std::runtime_error("Resized snip was not fitted and centered immediately.");
+                        throw std::runtime_error(
+                            "Resized snip was not fitted and centered immediately.");
                 }
-                double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+                double elapsed =
+                    std::chrono::duration<double, std::milli>(Clock::now() - start).count();
                 if (i >= 0)
                 {
                     times.push_back(elapsed);
@@ -6940,15 +7308,19 @@ void runResizeTest(HWND window)
                 }
             }
             std::sort(times.begin(), times.end());
-            report += std::string(scenario == 0 ? "blank" : scenario == 1 ? "4K snip" : "4K snip + border") +
-                (operation == 2 ? " title-bar double-click" : operation == 1 ? " maximize/restore" : " resize") +
-                ": median=" + std::to_string(times[samples / 2]) +
-                ", p95=" + std::to_string(times[static_cast<size_t>((samples - 1) * .95)]) +
-                ", worst=" + std::to_string(times.back()) +
-                "; paint averages: layout=" + std::to_string(sums.layout / samples) +
-                ", background=" + std::to_string(sums.background / samples) +
-                ", content=" + std::to_string(sums.content / samples) +
-                ", present=" + std::to_string(sums.present / samples) + "\n";
+            report += std::string(scenario == 0   ? "blank"
+                                  : scenario == 1 ? "4K snip"
+                                                  : "4K snip + border") +
+                      (operation == 2   ? " title-bar double-click"
+                       : operation == 1 ? " maximize/restore"
+                                        : " resize") +
+                      ": median=" + std::to_string(times[samples / 2]) +
+                      ", p95=" + std::to_string(times[static_cast<size_t>((samples - 1) * .95)]) +
+                      ", worst=" + std::to_string(times.back()) +
+                      "; paint averages: layout=" + std::to_string(sums.layout / samples) +
+                      ", background=" + std::to_string(sums.background / samples) +
+                      ", content=" + std::to_string(sums.content / samples) +
+                      ", present=" + std::to_string(sums.present / samples) + "\n";
         }
     }
     writeTestReport(L"resize-test-results.txt", report);
@@ -6966,7 +7338,7 @@ class SmokeNoPromptGuard
             wchar_t name[80]{}, title[80]{};
             GetClassNameW(window, name, 80);
             GetWindowTextW(window, title, 80);
-            if (wcscmp(name, L"#32770") == 0 && wcscmp(title, L"Snipper") == 0 &&
+            if (wcscmp(name, L"#32770") == 0 && wcscmp(title, L"Tiger Snip") == 0 &&
                 GetDlgItem(window, IDNO))
             {
                 shown = true;
@@ -6998,12 +7370,12 @@ class SmokeNoPromptGuard
 class SmokeHoverPopup
 {
     HWND host = nullptr, popup = nullptr;
-    static LRESULT CALLBACK observe(HWND window, UINT message, WPARAM wp, LPARAM lp,
-                                    UINT_PTR, DWORD_PTR data)
+    static LRESULT CALLBACK observe(HWND window, UINT message, WPARAM wp, LPARAM lp, UINT_PTR,
+                                    DWORD_PTR data)
     {
         auto &fixture = *reinterpret_cast<SmokeHoverPopup *>(data);
-        if (message == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE &&
-            fixture.popup && IsWindowVisible(fixture.popup))
+        if (message == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE && fixture.popup &&
+            IsWindowVisible(fixture.popup))
         {
             fixture.dismissed = true;
             ShowWindow(fixture.popup, SW_HIDE);
@@ -7016,31 +7388,31 @@ class SmokeHoverPopup
     RECT bounds{};
     SmokeHoverPopup(int x, int y)
     {
-        constexpr wchar_t className[] = L"JackSnip.SmokeHoverHost.1";
+        constexpr wchar_t className[] = L"TigerSnip.SmokeHoverHost.1";
         WNDCLASSW cls{};
         cls.lpfnWndProc = DefWindowProcW;
         cls.hInstance = app.instance;
         cls.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
         cls.lpszClassName = className;
         if (!RegisterClassW(&cls) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-            throw std::runtime_error("Cannot register hover-menu test host.");
+            throwWindowsError("Cannot register hover-menu test host.");
         host = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, className, L"Hover menu host",
-                              WS_OVERLAPPEDWINDOW, x, y, 320, 200, nullptr, nullptr,
-                              app.instance, nullptr);
+                               WS_OVERLAPPEDWINDOW, x, y, 320, 200, nullptr, nullptr, app.instance,
+                               nullptr);
         if (!host)
-            throw std::runtime_error("Cannot create hover-menu test host.");
+            throwWindowsError("Cannot create hover-menu test host.");
         if (!SetWindowSubclass(host, observe, 1, reinterpret_cast<DWORD_PTR>(this)))
         {
             DestroyWindow(host);
             throw std::runtime_error("Cannot observe hover-menu focus changes.");
         }
-        popup = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC", L"Transient hover menu",
-                               WS_POPUP | SS_WHITERECT, x + 30, y + 45, 220, 100,
-                               host, nullptr, app.instance, nullptr);
+        popup = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, L"STATIC",
+                                L"Transient hover menu", WS_POPUP | SS_WHITERECT, x + 30, y + 45,
+                                220, 100, host, nullptr, app.instance, nullptr);
         if (!popup)
         {
             DestroyWindow(host);
-            throw std::runtime_error("Cannot create hover-menu test popup.");
+            throwWindowsError("Cannot create hover-menu test popup.");
         }
         const BOOL disabled = TRUE;
         DwmSetWindowAttribute(host, DWMWA_TRANSITIONS_FORCEDISABLED, &disabled, sizeof(disabled));
@@ -7084,46 +7456,63 @@ class SmokeHoverPopup
     }
 };
 const std::array<Color, 9> PersistenceTestColors = {
-    Palette[0],      rgb(12, 34, 56),  rgb(210, 87, 133), rgb(15, 120, 220),
-    rgb(8, 91, 200), rgb(90, 35, 170), rgb(18, 90, 140),  rgb(25, 50, 75), rgb(240, 180, 30)};
+    Palette[0],       rgb(12, 34, 56),  rgb(210, 87, 133), rgb(15, 120, 220), rgb(8, 91, 200),
+    rgb(90, 35, 170), rgb(18, 90, 140), rgb(25, 50, 75),   rgb(240, 180, 30)};
 const std::array<uint8_t, 9> PersistenceTestStyles = {0, 0, 1, 4, 5, 1, 1, 0, 0};
 std::wstring smokeMenuPreviewPath;
 std::string smokeMenuPreviewError;
 void CALLBACK smokeShapeMenuTimer(HWND hwnd, UINT, UINT_PTR id, DWORD)
 {
-    KillTimer(hwnd, id);
-    try
-    {
-        RECT first{}, last{};
-        const bool logo = app.shapeMenu == app.logoMenu;
-        const bool professional = app.shapeMenu == app.professionalMenu;
-        const int count = GetMenuItemCount(app.shapeMenu);
-        if (GetMenuItemID(app.shapeMenu, 0) == static_cast<UINT>(styleCommand(Tool::Check, 0)))
-        {
-            if (count != StyleCounts[static_cast<size_t>(Tool::Check)])
-                throw std::runtime_error("Check/X menu is missing styles.");
-            for (int style = 0; style < count; ++style)
-                if (GetMenuItemID(app.shapeMenu, style) != static_cast<UINT>(styleCommand(Tool::Check, style)))
-                    throw std::runtime_error("Check/X menu command or order is incorrect.");
-        }
-        if (count < 3 || !GetMenuItemRect(hwnd, app.shapeMenu, logo ? 2 : 0, &first) ||
-            !GetMenuItemRect(hwnd, app.shapeMenu, count - 1, &last) ||
-            first.right - first.left < (logo ? 320 : professional ? 96 : 184) * app.dpi ||
-            first.bottom - first.top < (logo ? 72 : professional ? 18 : 48) * app.dpi)
-            throw std::runtime_error("Visual shape menu entries are missing or too small.");
-        const auto pixels = captureDesktop(first.left, first.top, first.right - first.left,
-                                          last.bottom - first.top);
-        saveBytes(smokeMenuPreviewPath, app.graphics.png(pixels));
-    }
-    catch (const std::exception &exception)
-    {
-        smokeMenuPreviewError = exception.what();
-    }
-    EndMenu();
+    callbackBoundary<int>(
+        [&]() -> int {
+            KillTimer(hwnd, id);
+            try
+            {
+                RECT first{}, last{};
+                const bool logo = app.shapeMenu == app.logoMenu;
+                const bool professional = app.shapeMenu == app.professionalMenu;
+                const int count = GetMenuItemCount(app.shapeMenu);
+                if (GetMenuItemID(app.shapeMenu, 0) ==
+                    static_cast<UINT>(styleCommand(Tool::Check, 0)))
+                {
+                    if (count != StyleCounts[static_cast<size_t>(Tool::Check)])
+                        throw std::runtime_error("Check/X menu is missing styles.");
+                    for (int style = 0; style < count; ++style)
+                        if (GetMenuItemID(app.shapeMenu, style) !=
+                            static_cast<UINT>(styleCommand(Tool::Check, style)))
+                            throw std::runtime_error("Check/X menu command or order is incorrect.");
+                }
+                if (count < 3 || !GetMenuItemRect(hwnd, app.shapeMenu, logo ? 2 : 0, &first) ||
+                    !GetMenuItemRect(hwnd, app.shapeMenu, count - 1, &last) ||
+                    first.right - first.left < (logo           ? 320
+                                                : professional ? 96
+                                                               : 184) *
+                                                   app.dpi ||
+                    first.bottom - first.top < (logo           ? 72
+                                                : professional ? 18
+                                                               : 48) *
+                                                   app.dpi)
+                    throw std::runtime_error("Visual shape menu entries are missing or too small.");
+                const auto pixels = captureDesktop(first.left, first.top, first.right - first.left,
+                                                   last.bottom - first.top);
+                saveBytes(smokeMenuPreviewPath, app.graphics.png(pixels));
+            }
+            catch (const std::exception &exception)
+            {
+                smokeMenuPreviewError = exception.what();
+            }
+            EndMenu();
+            return 0;
+        },
+        [&](const char *failure) {
+            OutputDebugStringA(failure);
+            EndMenu();
+        },
+        0);
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
+int applicationMain(HINSTANCE instance, int show)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     app.instance = instance;
@@ -7135,12 +7524,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     }
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    bool selfTest = false, trayOnly = false, snipNow = false, verifyPreferences = false, shortcutTest = false,
-         navigationTest = false, paletteTest = false, verifyPalette = false, eraserTest = false,
-         penSizeTest = false, verifyPenSize = false, arrowEditTest = false, recentTest = false;
+    bool selfTest = false, trayOnly = false, snipNow = false, verifyPreferences = false,
+         shortcutTest = false, navigationTest = false, paletteTest = false, verifyPalette = false,
+         eraserTest = false, penSizeTest = false, verifyPenSize = false, arrowEditTest = false,
+         recentTest = false;
+    std::filesystem::path testOutputRoot = std::filesystem::current_path() / L"test-output",
+                          testFixture;
     for (int i = 1; i < argc; ++i)
     {
-        if (wcscmp(argv[i], L"--self-test") == 0)
+        if (wcscmp(argv[i], L"--test-output") == 0 && i + 1 < argc)
+            testOutputRoot = std::filesystem::absolute(argv[++i]);
+        else if (wcscmp(argv[i], L"--test-fixture") == 0 && i + 1 < argc)
+            testFixture = std::filesystem::absolute(argv[++i]);
+        else if (wcscmp(argv[i], L"--self-test") == 0)
             selfTest = true;
         else if (wcscmp(argv[i], L"--tray") == 0)
             trayOnly = true;
@@ -7186,8 +7582,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         {
             wchar_t temporary[MAX_PATH]{};
             if (GetTempPathW(MAX_PATH, temporary))
-                app.resizeTrace.open(std::filesystem::path(temporary) /
-                    (L"Snipper-resize-" + std::to_wstring(GetCurrentProcessId()) + L".log"));
+                app.resizeTrace.open(
+                    std::filesystem::path(temporary) /
+                    (L"Tiger Snip-resize-" + std::to_wstring(GetCurrentProcessId()) + L".log"));
         }
         else if (wcscmp(argv[i], L"--verify-smoke-preferences") == 0)
             verifyPreferences = true;
@@ -7197,6 +7594,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     HANDLE mutex = nullptr;
     try
     {
+        if (selfTest || app.smoke || verifyPreferences || verifyPalette || penSizeTest ||
+            verifyPenSize || app.resizeTest)
+        {
+            testReportDirectory = createTestDirectory(testOutputRoot);
+            if ((verifyPreferences || verifyPalette || verifyPenSize) && testFixture.empty())
+                throw std::runtime_error("Restart verification requires --test-fixture with the "
+                                         "producer run directory.");
+            std::filesystem::current_path(testFixture.empty() ? testReportDirectory : testFixture);
+        }
         if (penSizeTest || verifyPenSize)
         {
             app.iniPath = (std::filesystem::current_path() / L"pen-size-settings.ini").wstring();
@@ -7204,8 +7610,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             {
                 testPenSizePreferences();
                 writeTestReport(L"pen-size-test-results.txt",
-                    "PASS: default pen size, size-only preference write, reload, 1-100px bounds, no-op writes, "
-                    "selected-stroke resizing with undo, independent highlight/text sizes, saved restart fixture.\n");
+                                "PASS: default pen size, size-only preference write, reload, "
+                                "1-100px bounds, no-op writes, "
+                                "selected-stroke resizing with undo, independent highlight/text "
+                                "sizes, saved restart fixture.\n");
             }
             else
             {
@@ -7213,10 +7621,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 if (app.thickness != 13 || app.highlightWidth != 31 || app.fontSize != 35 ||
                     app.colors[static_cast<size_t>(Tool::Pen)] != rgb(12, 34, 56) ||
                     app.toolPreferencesDirty || app.tool != Tool::Select)
-                    throw std::runtime_error("Pen size/color or independent highlight/text sizes did not survive a process exit.");
+                    throw std::runtime_error("Pen size/color or independent highlight/text sizes "
+                                             "did not survive a process exit.");
                 writeTestReport(L"pen-size-preference-results.txt",
-                    "PASS: a fresh process restored 13px pen size and its color, independent highlight/text sizes, "
-                    "no pending preference write and unchanged active tool.\n");
+                                "PASS: a fresh process restored 13px pen size and its color, "
+                                "independent highlight/text sizes, "
+                                "no pending preference write and unchanged active tool.\n");
             }
         }
         else if (verifyPalette)
@@ -7224,9 +7634,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             app.iniPath = (std::filesystem::current_path() / L"smoke-settings.ini").wstring();
             loadToolPreferences();
             if (app.palette != PersistenceTestPalette || app.paletteDirty)
-                throw std::runtime_error("Saved palette count, order and colors did not survive a process exit.");
+                throw std::runtime_error(
+                    "Saved palette count, order and colors did not survive a process exit.");
             writeTestReport(L"palette-preference-results.txt",
-                "PASS: a fresh process restored all ten saved palette colors in order, with no pending write.\n");
+                            "PASS: a fresh process restored all ten saved palette colors in order, "
+                            "with no pending write.\n");
         }
         else if (verifyPreferences)
         {
@@ -7234,46 +7646,62 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             GetCurrentDirectoryW(32768, testDirectory);
             app.iniPath = std::wstring(testDirectory) + L"\\smoke-settings.ini";
             loadToolPreferences();
-            if (GetPrivateProfileIntW(L"Settings", L"Hotkey", 0, app.iniPath.c_str()) !=
+            if (preferenceUInt(app.iniPath, L"Settings", L"Hotkey", 0) !=
                     MAKEWORD(VK_F20, HOTKEYF_CONTROL | HOTKEYF_ALT) ||
-                GetPrivateProfileIntW(L"Settings", L"InstantHotkey", 0, app.iniPath.c_str()) !=
-                    VK_PAUSE)
-                throw std::runtime_error("Independent capture shortcuts did not survive a process exit.");
+                preferenceUInt(app.iniPath, L"Settings", L"InstantHotkey", 0) != VK_PAUSE)
+                throw std::runtime_error(
+                    "Independent capture shortcuts did not survive a process exit.");
             if (app.colors != PersistenceTestColors || app.styles != PersistenceTestStyles ||
                 app.palette != PersistenceTestPalette || app.paletteDirty ||
                 app.tool != Tool::Select || app.toolPreferencesDirty || app.fontSize != 40 ||
                 !app.textBold || !app.textBox || app.geometryTool != Tool::Rectangle ||
-                !app.exportOptions.professionalBorder || !app.exportOptions.samtecLogo || app.exportPreferencesDirty ||
-                app.exportOptions.professionalBlur || !app.exportOptions.professionalRounded ||
-                app.saveFolder != (std::filesystem::path(testDirectory) / L"smoke-save location").wstring() ||
-                app.collapsedRows != 6 || app.layoutPreferencesDirty || app.fullScreen || app.exportOptions.samtecStyle != 5)
-                throw std::runtime_error("Tool preferences did not survive a complete process exit.");
-            writeTestReport(L"preference-test-results.txt",
-                "PASS: a fresh process restored every tool's style and custom color after full exit; "
-                "Professional Border with separate blur/rounding, Samtec Logo and selected style, save location, collapsed rows, and both capture shortcuts restored, active tool unchanged, no pending preference write.\n");
+                !app.exportOptions.professionalBorder || !app.exportOptions.samtecLogo ||
+                app.exportPreferencesDirty || app.exportOptions.professionalBlur ||
+                !app.exportOptions.professionalRounded ||
+                app.saveFolder !=
+                    (std::filesystem::path(testDirectory) / L"smoke-save location").wstring() ||
+                app.collapsedRows != 6 || app.layoutPreferencesDirty || app.fullScreen ||
+                app.exportOptions.samtecStyle != 5)
+                throw std::runtime_error(
+                    "Tool preferences did not survive a complete process exit.");
+            writeTestReport(
+                L"preference-test-results.txt",
+                "PASS: a fresh process restored every tool's style and custom color after full "
+                "exit; "
+                "Professional Border with separate blur/rounding, Samtec Logo and selected style, "
+                "save location, collapsed rows, and both capture shortcuts restored, active tool "
+                "unchanged, no pending preference write.\n");
         }
         else if (selfTest)
         {
             app.graphics.test();
             testPenCursor();
             testChiselCursor();
-            writeTestReport(L"self-test-results.txt",
-                            "PASS: model history, cancellation, hit testing, resizing, coordinate "
-                            "transforms, cropping, pen/circle/arrow/check composition, translucent chisel highlights with uniform "
-                            "stroke overlap, readable text, nib geometry, hit testing/resizing, and PNG round trips, six check/X styles at small and large sizes, "
-                            "solid/dashed/dotted line patterns, outlined/curved/straight/block gloss arrow artwork and "
-                            "selection, PNG "
-                            "pixel-perfect round trip, moved annotations, image color sampling, "
-                            "text/bold/multiline/rounded-box export, square/rounded/highlight/filled rectangles, "
-                            "native pen cursor color/size/hotspot and chisel cursor alpha composition without white fringes on light/dark backgrounds at 100/150/200% DPI and 10/100/800% zoom; "
-                            "Professional Border default OFF, independent blur/rounding, 20px transparent padding with blur, softened neutral halo on white/black without a hard outline, "
-                            "unchanged content, tiny snips, transparent PNG round trip.\n");
+            writeTestReport(
+                L"self-test-results.txt",
+                "PASS: model history, cancellation, hit testing, resizing, coordinate "
+                "transforms, cropping, pen/circle/arrow/check composition, translucent chisel "
+                "highlights with uniform "
+                "stroke overlap, readable text, nib geometry, hit testing/resizing, and PNG round "
+                "trips, six check/X styles at small and large sizes, "
+                "solid/dashed/dotted line patterns, outlined/curved/straight/block gloss arrow "
+                "artwork and "
+                "selection, PNG "
+                "pixel-perfect round trip, moved annotations, image color sampling, "
+                "text/bold/multiline/rounded-box export, square/rounded/highlight/filled "
+                "rectangles, "
+                "native pen cursor color/size/hotspot and chisel cursor alpha composition without "
+                "white fringes on light/dark backgrounds at 100/150/200% DPI and 10/100/800% zoom; "
+                "Professional Border default OFF, independent blur/rounding, 20px transparent "
+                "padding with blur, softened neutral halo on white/black without a hard outline, "
+                "unchanged content, tiny snips, transparent PNG round trip.\n");
         }
         else
         {
-            const std::wstring mutexName = app.diagnosticInstance
-                ? L"Local\\JackSnip.ResizeDiagnostic." + std::to_wstring(GetCurrentProcessId())
-                : L"Local\\JackSnip.SingleInstance.1";
+            const std::wstring mutexName =
+                app.diagnosticInstance
+                    ? L"Local\\TigerSnip.ResizeDiagnostic." + std::to_wstring(GetCurrentProcessId())
+                    : L"Local\\TigerSnip.SingleInstance.1";
             mutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
             if (!mutex)
                 throw std::runtime_error("Cannot initialize the app instance.");
@@ -7292,15 +7720,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 return 0;
             }
             INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_WIN95_CLASSES};
-            InitCommonControlsEx(&controls);
+            if (!InitCommonControlsEx(&controls))
+                throwWindowsError("Cannot initialize Windows controls.");
             app.taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
             registerClasses();
             auto path = executablePath();
-            app.iniPath = path.substr(0, path.find_last_of(L"\\/") + 1) + L"JackSnip.ini";
+            app.iniPath = path.substr(0, path.find_last_of(L"\\/") + 1) + L"TigerSnip.ini";
+            if (!app.smoke && !app.resizeTest && !app.diagnosticInstance)
+                app.iniPath = personalSettingsPath();
             if (app.smoke)
             {
-                if (app.exportOptions.professionalBorder || app.exportOptions.samtecLogo || app.exportPreferencesDirty)
-                    throw std::runtime_error("Professional Border must start OFF without saved preferences.");
+                if (app.exportOptions.professionalBorder || app.exportOptions.samtecLogo ||
+                    app.exportPreferencesDirty)
+                    throw std::runtime_error(
+                        "Professional Border must start OFF without saved preferences.");
                 wchar_t testDirectory[32768]{};
                 GetCurrentDirectoryW(32768, testDirectory);
                 app.iniPath = std::wstring(testDirectory) + L"\\smoke-settings.ini";
@@ -7309,48 +7742,58 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 loadToolPreferences();
             if (app.resizeTrace.is_open())
             {
-                app.resizeTrace << "Snipper resize trace; pid=" << GetCurrentProcessId() << "; build=" <<
-                    __DATE__ << " " << __TIME__ << "; renderer=" <<
-                    (app.softwareRendering ? "software" : "hardware/default") << "\n";
+                app.resizeTrace << "Tiger Snip resize trace; pid=" << GetCurrentProcessId()
+                                << "; build=" << __DATE__ << " " << __TIME__ << "; renderer="
+                                << (app.softwareRendering ? "software" : "hardware/default")
+                                << "\n";
                 app.resizeTrace.flush();
             }
             if (app.diagnosticInstance)
             {
                 wchar_t temporary[MAX_PATH]{};
                 if (!GetTempPathW(MAX_PATH, temporary))
-                    throw std::runtime_error("Cannot create isolated diagnostic settings.");
-                app.iniPath = (std::filesystem::path(temporary) /
-                    (L"Snipper-diagnostic-" + std::to_wstring(GetCurrentProcessId()) + L".ini")).wstring();
+                    throwWindowsError("Cannot create isolated diagnostic settings.");
+                app.iniPath =
+                    (std::filesystem::path(temporary) /
+                     (L"Tiger Snip-diagnostic-" + std::to_wstring(GetCurrentProcessId()) + L".ini"))
+                        .wstring();
             }
-            app.hotkey = static_cast<WORD>(
-                GetPrivateProfileIntW(L"Settings", L"Hotkey", app.hotkey, app.iniPath.c_str()));
+            app.hotkey =
+                static_cast<WORD>(preferenceUInt(app.iniPath, L"Settings", L"Hotkey", app.hotkey));
             app.instantHotkey = static_cast<WORD>(
-                GetPrivateProfileIntW(L"Settings", L"InstantHotkey", app.instantHotkey, app.iniPath.c_str()));
+                preferenceUInt(app.iniPath, L"Settings", L"InstantHotkey", app.instantHotkey));
             HDC dc = GetDC(nullptr);
+            if (!dc)
+                throwWindowsError("Cannot read the desktop display settings.");
             float dpi = GetDeviceCaps(dc, LOGPIXELSX) / 96.0f;
             ReleaseDC(nullptr, dc);
             app.dialogFont =
                 CreateFontW(-static_cast<int>(14 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                             CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            if (!app.dialogFont)
+                throwWindowsError("Cannot create the dialog font.");
             RECT work{};
-            SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+            if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0))
+                throwWindowsError("Cannot locate the desktop work area.");
             int width = std::min(static_cast<int>(1050 * dpi),
                                  static_cast<int>(work.right - work.left)),
                 height =
                     std::min(static_cast<int>(740 * dpi), static_cast<int>(work.bottom - work.top));
-            HWND window = CreateWindowExW(0, app.diagnosticInstance ? DiagnosticClass : MainClass,
-                                          app.diagnosticInstance ? L"Snipper - Resize diagnostic" : L"Snipper", WS_OVERLAPPEDWINDOW,
-                                          work.left + (work.right - work.left - width) / 2,
-                                          work.top + (work.bottom - work.top - height) / 2, width,
-                                          height, nullptr, createMenu(), instance, nullptr);
+            HWND window = CreateWindowExW(
+                0, app.diagnosticInstance ? DiagnosticClass : MainClass,
+                app.diagnosticInstance ? L"Tiger Snip - Resize diagnostic" : L"Tiger Snip",
+                WS_OVERLAPPEDWINDOW, work.left + (work.right - work.left - width) / 2,
+                work.top + (work.bottom - work.top - height) / 2, width, height, nullptr,
+                createMenu(), instance, nullptr);
             if (!window)
-                throw std::runtime_error("Cannot create the editor window.");
+                throwWindowsError("Cannot create the editor window.");
             if (app.resizeTrace.is_open())
                 SetTimer(window, TraceHeartbeatTimer, 250, nullptr);
             // The smoke process must not compete with the user's running global shortcut.
             WORD initial = app.smoke || app.resizeTest || app.diagnosticInstance ? 0 : app.hotkey;
-            WORD initialFull = app.smoke || app.resizeTest || app.diagnosticInstance ? 0 : app.instantHotkey;
+            WORD initialFull =
+                app.smoke || app.resizeTest || app.diagnosticInstance ? 0 : app.instantHotkey;
             app.hotkey = 0;
             app.instantHotkey = 0;
             if (!registerShortcuts(initial, initialFull, false))
@@ -7377,9 +7820,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
             {
                 testNavigation(window);
                 writeTestReport(L"navigation-test-results.txt",
-                    "PASS: ordinary wheel zoom, dynamic fitted minimum, pointer anchoring, 800% maximum, "
-                    "open/closed hand cursors, left-drag panning, bounded edges, centered fitting axes, "
-                    "annotation move/resize priority at 100/150/200% DPI, resize/full-screen fit and focus, unchanged export.\n");
+                                "PASS: ordinary wheel zoom, dynamic fitted minimum, pointer "
+                                "anchoring, 800% maximum, "
+                                "open/closed hand cursors, left-drag panning, bounded edges, "
+                                "centered fitting axes, "
+                                "annotation move/resize priority at 100/150/200% DPI, "
+                                "resize/full-screen fit and focus, unchanged export.\n");
                 command(Exit);
             }
             else if (paletteTest)
@@ -7388,19 +7834,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 app.palette = PersistenceTestPalette;
                 app.paletteDirty = true;
                 writeTestReport(L"palette-test-results.txt",
-                    "PASS: picker spectrum/hue, RGB/hex validation, Add/Edit/Cancel, duplicates, selected annotation "
-                    "recolor and undo/export, uninterrupted live text editing, deleting without changing annotations, 0/4/10/18 saved colors, "
-                    "wrapped swatch mouse clicks and toolbar layout at 100/150/200% DPI, malformed preferences.\n");
+                                "PASS: picker spectrum/hue, RGB/hex validation, Add/Edit/Cancel, "
+                                "duplicates, selected annotation "
+                                "recolor and undo/export, uninterrupted live text editing, "
+                                "deleting without changing annotations, 0/4/10/18 saved colors, "
+                                "wrapped swatch mouse clicks and toolbar layout at 100/150/200% "
+                                "DPI, malformed preferences.\n");
                 command(Exit);
             }
             else if (eraserTest)
             {
                 testEraserTool();
                 writeTestReport(L"eraser-test-results.txt",
-                    "PASS: eraser toolbar/E toggle, older whole stroke deletion while keeping newer annotations, "
-                    "topmost overlapping object per click, sparse pointer sweeps, all annotation types/styles, "
-                    "one undo step per gesture, redo, Esc/capture-loss cancellation, unchanged screenshot/export restoration, "
-                    "no-op redo preservation, cached cursor/hits at 100/150/200% DPI and 50/100/800% zoom, toolbar layout.\n");
+                                "PASS: eraser toolbar/E toggle, older whole stroke deletion while "
+                                "keeping newer annotations, "
+                                "topmost overlapping object per click, sparse pointer sweeps, all "
+                                "annotation types/styles, "
+                                "one undo step per gesture, redo, Esc/capture-loss cancellation, "
+                                "unchanged screenshot/export restoration, "
+                                "no-op redo preservation, cached cursor/hits at 100/150/200% DPI "
+                                "and 50/100/800% zoom, toolbar layout.\n");
                 command(Exit);
             }
             else if (recentTest)
@@ -7408,28 +7861,38 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 testRecentSnips();
                 acceptCapture(Bitmap::create(10, 10));
                 command(Exit);
-                if (!app.recent.empty()) throw std::runtime_error("Exiting did not clear the recent capture collection.");
+                if (!app.recent.empty())
+                    throw std::runtime_error(
+                        "Exiting did not clear the recent capture collection.");
                 writeTestReport(L"recent-test-results.txt",
-                    "PASS: last 10 session captures including current, oldest eviction and stable order, active-buffer ownership, "
-                    "text/crop/undo/redo/zoom/save-path restoration, PNG export, canceled capture, close-to-tray retention, "
-                    "mouse and keyboard selection/dismissal, compact scroll, popup layout at 100/150/200% DPI, "
-                    "collapsed rows and full screen, cached thumbnails, switch/paint timing, empty fresh session and Exit cleanup.\n");
+                                "PASS: last 10 session captures including current, oldest eviction "
+                                "and stable order, active-buffer ownership, "
+                                "text/crop/undo/redo/zoom/save-path restoration, PNG export, "
+                                "canceled capture, close-to-tray retention, "
+                                "mouse and keyboard selection/dismissal, compact scroll, popup "
+                                "layout at 100/150/200% DPI, "
+                                "collapsed rows and full screen, cached thumbnails, switch/paint "
+                                "timing, empty fresh session and Exit cleanup.\n");
             }
             else if (arrowEditTest)
             {
                 testCurvedArrowControls();
                 writeTestReport(L"arrow-edit-test-results.txt",
-                    "PASS: curved arrow Flip mouse control at 100/150/200% DPI and 50/100/800% zoom; "
-                    "selected object only, edge positioning, unchanged tool preferences, one-step undo/redo, "
-                    "hit testing, preview/export agreement and PNG round trips.\n");
+                                "PASS: curved arrow Flip mouse control at 100/150/200% DPI and "
+                                "50/100/800% zoom; "
+                                "selected object only, edge positioning, unchanged tool "
+                                "preferences, one-step undo/redo, "
+                                "hit testing, preview/export agreement and PNG round trips.\n");
                 command(Exit);
             }
             else if (shortcutTest)
             {
                 testShortcutFields();
                 writeTestReport(L"shortcut-test-results.txt",
-                    "PASS: visible shortcut labels, restored binding, Home/Pause key entry, Backspace, Pause key, "
-                    "Cancel, Save, real Windows hotkey delivery, instant capture and reopened settings.\n");
+                                "PASS: visible shortcut labels, restored binding, Home/Pause key "
+                                "entry, Backspace, Pause key, "
+                                "Cancel, Save, real Windows hotkey delivery, instant capture and "
+                                "reopened settings.\n");
                 command(Exit);
             }
             else if (app.smoke)
@@ -7477,7 +7940,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     editorBounds.right - editorBounds.left, editorBounds.bottom - editorBounds.top,
                     nullptr, nullptr, instance, nullptr);
                 if (!backing)
-                    throw std::runtime_error("Cannot create capture regression backing.");
+                    throwWindowsError("Cannot create capture regression backing.");
                 const BOOL noBackingAnimation = TRUE;
                 DwmSetWindowAttribute(backing, DWMWA_TRANSITIONS_FORCEDISABLED, &noBackingAnimation,
                                       sizeof(noBackingAnimation));
@@ -7498,7 +7961,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 UpdateWindow(window);
                 command(NewSnip);
                 if (SmokeNoPromptGuard::shown || IsWindowVisible(window) || !app.capturePending)
-                    throw std::runtime_error("New snip prompted instead of immediately hiding the unsaved editor.");
+                    throw std::runtime_error(
+                        "New snip prompted instead of immediately hiding the unsaved editor.");
                 SendMessageW(window, WM_HOTKEY, app.hotkeyId, 0);
                 if (!app.capturePending || app.overlay)
                     throw std::runtime_error("Repeated shortcut replaced a pending capture.");
@@ -7533,10 +7997,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 SendMessageW(window, WM_HOTKEY, app.hotkeyId, 0);
                 if (!app.overlay || app.capturePending)
                     throw std::runtime_error("Hotkey did not open selection immediately.");
-                const auto instantBacking = app.desktop.crop(editorBounds.left - app.virtualX,
-                    editorBounds.top - app.virtualY, backingPixels.width, backingPixels.height);
+                const auto instantBacking = app.desktop.crop(
+                    editorBounds.left - app.virtualX, editorBounds.top - app.virtualY,
+                    backingPixels.width, backingPixels.height);
                 if (instantBacking.pixels != backingPixels.pixels)
-                    throw std::runtime_error("Visible editor or its fade leaked into instant hotkey capture.");
+                    throw std::runtime_error(
+                        "Visible editor or its fade leaked into instant hotkey capture.");
                 DestroyWindow(backing);
                 SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -7572,81 +8038,105 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                         ShowWindow(window, SW_HIDE);
                     SmokeHoverPopup popup(editorBounds.left + 40, editorBounds.top + 100);
                     const auto reference = captureDesktop(popup.bounds.left, popup.bounds.top,
-                        popup.bounds.right - popup.bounds.left, popup.bounds.bottom - popup.bounds.top);
+                                                          popup.bounds.right - popup.bounds.left,
+                                                          popup.bounds.bottom - popup.bounds.top);
                     SendMessageW(window, WM_HOTKEY, app.hotkeyId, 0);
                     if (!popup.dismissed)
-                        throw std::runtime_error("Hover-menu fixture did not dismiss on focus loss.");
+                        throw std::runtime_error(
+                            "Hover-menu fixture did not dismiss on focus loss.");
                     {
                         if (SmokeNoPromptGuard::shown || !app.overlay || app.capturePending)
-                            throw std::runtime_error("Hotkey capture still waits for a capture timer.");
+                            throw std::runtime_error(
+                                "Hotkey capture still waits for a capture timer.");
                         const HWND firstOverlay = app.overlay;
                         SendMessageW(window, WM_HOTKEY, app.hotkeyId, 0);
                         if (app.overlay != firstOverlay)
-                            throw std::runtime_error("Repeated shortcut replaced active selection.");
+                            throw std::runtime_error(
+                                "Repeated shortcut replaced active selection.");
                         const auto frozen = app.desktop.crop(popup.bounds.left - app.virtualX,
-                            popup.bounds.top - app.virtualY, reference.width, reference.height);
+                                                             popup.bounds.top - app.virtualY,
+                                                             reference.width, reference.height);
                         if (frozen.pixels != reference.pixels)
-                            throw std::runtime_error("Instant capture lost the hover popup before freezing the screen.");
+                            throw std::runtime_error(
+                                "Instant capture lost the hover popup before freezing the screen.");
                         SendMessageW(app.overlay, WM_KEYDOWN, VK_ESCAPE, 0);
                         if (app.overlay || !app.desktop.empty() || !IsWindowVisible(window) ||
                             app.image.width != 180 || app.image.height != 120)
-                            throw std::runtime_error("Canceling instant selection failed to restore the previous snip.");
+                            throw std::runtime_error(
+                                "Canceling instant selection failed to restore the previous snip.");
                         if ((mode & 1) && (!app.dirty || app.document.items.size() != 1))
-                            throw std::runtime_error("Canceling selection lost previous unsaved annotations.");
+                            throw std::runtime_error(
+                                "Canceling selection lost previous unsaved annotations.");
                     }
                     SendMessageW(window, WM_TIMER, CaptureTimer, 0);
                     if (app.overlay || app.capturePending || !app.desktop.empty())
-                        throw std::runtime_error("A stale capture timer reopened canceled instant selection.");
+                        throw std::runtime_error(
+                            "A stale capture timer reopened canceled instant selection.");
                 }
                 POINT previousPointer{};
                 GetCursorPos(&previousPointer);
                 int cursorVisibilityCalls = 1;
-                while (ShowCursor(TRUE) < 0) ++cursorVisibilityCalls;
+                while (ShowCursor(TRUE) < 0)
+                    ++cursorVisibilityCalls;
                 for (int mode = 0; mode < 4; ++mode)
                 {
                     releaseImage();
                     app.image = Bitmap::create(180, 120);
                     app.dirty = (mode & 1) != 0;
-                    if (app.dirty) app.document.items.push_back(unsaved);
+                    if (app.dirty)
+                        app.document.items.push_back(unsaved);
                     showEditor();
-                    if (mode >= 2) ShowWindow(window, SW_HIDE);
+                    if (mode >= 2)
+                        ShowWindow(window, SW_HIDE);
                     SmokeHoverPopup popup(editorBounds.left + 40, editorBounds.top + 100);
                     SetCursorPos(popup.bounds.left + 30, popup.bounds.top + 30);
                     SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-                    const auto reference = captureDesktop(popup.bounds.left, popup.bounds.top,
-                        popup.bounds.right - popup.bounds.left, popup.bounds.bottom - popup.bounds.top, true);
+                    const auto reference = captureDesktop(
+                        popup.bounds.left, popup.bounds.top, popup.bounds.right - popup.bounds.left,
+                        popup.bounds.bottom - popup.bounds.top, true);
                     const auto withoutPointer = captureDesktop(popup.bounds.left, popup.bounds.top,
-                        reference.width, reference.height);
+                                                               reference.width, reference.height);
                     if (reference.pixels == withoutPointer.pixels)
                     {
                         CURSORINFO pointer{};
                         pointer.cbSize = sizeof(pointer);
                         GetCursorInfo(&pointer);
-                        throw std::runtime_error("Instant capture fixture did not contain the pointer: flags=" +
-                            std::to_string(pointer.flags) + " position=" + std::to_string(pointer.ptScreenPos.x) +
-                            "," + std::to_string(pointer.ptScreenPos.y) + " expected=" +
-                            std::to_string(popup.bounds.left + 30) + "," + std::to_string(popup.bounds.top + 30));
+                        throw std::runtime_error(
+                            "Instant capture fixture did not contain the pointer: flags=" +
+                            std::to_string(pointer.flags) +
+                            " position=" + std::to_string(pointer.ptScreenPos.x) + "," +
+                            std::to_string(pointer.ptScreenPos.y) +
+                            " expected=" + std::to_string(popup.bounds.left + 30) + "," +
+                            std::to_string(popup.bounds.top + 30));
                     }
                     SendMessageW(window, WM_HOTKEY, app.instantHotkeyId, 0);
-                    if (!popup.dismissed || app.overlay || app.capturePending || !app.desktop.empty() ||
+                    if (!popup.dismissed || app.overlay || app.capturePending ||
+                        !app.desktop.empty() ||
                         app.image.width != GetSystemMetrics(SM_CXVIRTUALSCREEN) ||
                         app.image.height != GetSystemMetrics(SM_CYVIRTUALSCREEN) ||
-                        !IsWindowVisible(window) || app.tool != Tool::Pen || !app.document.items.empty())
-                        throw std::runtime_error("Instant all-monitor shortcut did not open the frozen desktop in the editor.");
+                        !IsWindowVisible(window) || app.tool != Tool::Pen ||
+                        !app.document.items.empty())
+                        throw std::runtime_error("Instant all-monitor shortcut did not open the "
+                                                 "frozen desktop in the editor.");
                     const auto capturedPopup = app.image.crop(popup.bounds.left - app.virtualX,
-                        popup.bounds.top - app.virtualY, reference.width, reference.height);
+                                                              popup.bounds.top - app.virtualY,
+                                                              reference.width, reference.height);
                     if (capturedPopup.pixels != reference.pixels)
                     {
                         saveBytes(L"smoke-test-pointer-reference.png", app.graphics.png(reference));
-                        saveBytes(L"smoke-test-pointer-captured.png", app.graphics.png(capturedPopup));
-                        throw std::runtime_error("Instant all-monitor capture lost the hover menu or pointer.");
+                        saveBytes(L"smoke-test-pointer-captured.png",
+                                  app.graphics.png(capturedPopup));
+                        throw std::runtime_error(
+                            "Instant all-monitor capture lost the hover menu or pointer.");
                     }
                     SendMessageW(window, WM_TIMER, CaptureTimer, 0);
                     if (app.overlay || app.capturePending)
-                        throw std::runtime_error("Stale timer opened selection after instant all-monitor capture.");
+                        throw std::runtime_error(
+                            "Stale timer opened selection after instant all-monitor capture.");
                 }
                 SetCursorPos(previousPointer.x, previousPointer.y);
-                while (cursorVisibilityCalls-- > 0) ShowCursor(FALSE);
+                while (cursorVisibilityCalls-- > 0)
+                    ShowCursor(FALSE);
                 releaseImage();
                 app.image = Bitmap::create(640, 360);
                 for (int y = 0; y < app.image.height; ++y)
@@ -7834,14 +8324,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 if (!app.pickingColor || !active(Eyedropper))
                     throw std::runtime_error("Eyedropper toolbar did not activate.");
                 SendMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON,
-                    MAKELPARAM(2, static_cast<int>((canvasRect().top + 2) * app.dpi)));
+                             MAKELPARAM(2, static_cast<int>((canvasRect().top + 2) * app.dpi)));
                 SendMessageW(window, WM_LBUTTONUP, 0,
-                    MAKELPARAM(2, static_cast<int>((canvasRect().top + 2) * app.dpi)));
-                if (!app.pickingColor || activeColor() != penColor || app.document.items.size() != 1)
-                    throw std::runtime_error("Eyedropper sampled workspace pixels or drew an annotation.");
+                             MAKELPARAM(2, static_cast<int>((canvasRect().top + 2) * app.dpi)));
+                if (!app.pickingColor || activeColor() != penColor ||
+                    app.document.items.size() != 1)
+                    throw std::runtime_error(
+                        "Eyedropper sampled workspace pixels or drew an annotation.");
                 processKey(VK_ESCAPE);
                 if (app.pickingColor || app.tool != Tool::Pen || activeColor() != penColor)
-                    throw std::runtime_error("Canceling the eyedropper changed the previous tool/color.");
+                    throw std::runtime_error(
+                        "Canceling the eyedropper changed the previous tool/color.");
                 for (float scale : {1.0f, 2.0f, 4.0f})
                 {
                     app.fit = false;
@@ -7854,22 +8347,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     const Point sample{320, 180};
                     const Point screen = app.view.toScreen(sample);
                     const LPARAM click = MAKELPARAM(static_cast<int>(screen.x * app.dpi),
-                                                     static_cast<int>(screen.y * app.dpi));
-                    const Point actual = app.view.toImage({GET_X_LPARAM(click) / app.dpi,
-                                                          GET_Y_LPARAM(click) / app.dpi});
+                                                    static_cast<int>(screen.y * app.dpi));
+                    const Point actual = app.view.toImage(
+                        {GET_X_LPARAM(click) / app.dpi, GET_Y_LPARAM(click) / app.dpi});
                     const auto expected = app.image.sample(actual);
                     SendMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, click);
                     SendMessageW(window, WM_LBUTTONUP, 0, click);
                     if (!expected || app.pickingColor || app.tool != Tool::Pen ||
                         activeColor() != *expected || app.document.items.size() != 1 ||
                         app.drag != Drag::None || GetCapture() == window)
-                        throw std::runtime_error("Eyedropper sampling at different zoom levels failed: scale=" +
+                        throw std::runtime_error(
+                            "Eyedropper sampling at different zoom levels failed: scale=" +
                             std::to_string(scale) + " picking=" + std::to_string(app.pickingColor) +
                             " x=" + std::to_string(screen.x) + " y=" + std::to_string(screen.y));
                     const auto cursor = editorCursor(screen);
                     if (cursor != app.penCursor || app.penCursorColor != *expected ||
-                        std::abs(app.penCursorDiameter - std::max(1.0f, app.thickness * app.view.scale * app.dpi)) > .001f)
-                        throw std::runtime_error("Picked color or zoom did not update the pen cursor.");
+                        std::abs(app.penCursorDiameter -
+                                 std::max(1.0f, app.thickness * app.view.scale * app.dpi)) > .001f)
+                        throw std::runtime_error(
+                            "Picked color or zoom did not update the pen cursor.");
                 }
                 changeColor(penColor);
                 command(Fit);
@@ -7890,7 +8386,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 if (app.pickingColor || app.document.selected != circleSelection ||
                     app.document.items[1].color != penColor ||
                     app.colors[static_cast<size_t>(Tool::Circle)] != penColor)
-                    throw std::runtime_error("Eyedropper did not sample annotations/recolor the selection.");
+                    throw std::runtime_error(
+                        "Eyedropper did not sample annotations/recolor the selection.");
                 command(Undo);
                 if (app.document.items[1].color != Palette[4])
                     throw std::runtime_error("Eyedropper recolor was not undoable.");
@@ -7923,15 +8420,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     command(styleCommand(Tool::Check, style));
                     dragImage({600, 120}, {600, 120});
                     auto bounds = app.document.items.back().bounds();
-                    dragImage({bounds.right, bounds.bottom}, {bounds.right + 20, bounds.bottom + 20});
+                    dragImage({bounds.right, bounds.bottom},
+                              {bounds.right + 20, bounds.bottom + 20});
                     bounds = app.document.items.back().bounds();
                     dragImage({(bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2},
-                              {(bounds.left + bounds.right) / 2 - 30, (bounds.top + bounds.bottom) / 2 - 20});
+                              {(bounds.left + bounds.right) / 2 - 30,
+                               (bounds.top + bounds.bottom) / 2 - 20});
                     const auto &cross = app.document.items.back();
-                    if (cross.kind != Tool::Check || cross.style != style || cross.color != Palette[0] ||
-                        cross.bounds().width() < 70 || app.tool != Tool::Select ||
+                    if (cross.kind != Tool::Check || cross.style != style ||
+                        cross.color != Palette[0] || cross.bounds().width() < 70 ||
+                        app.tool != Tool::Select ||
                         !cross.hit({(cross.a.x + cross.b.x) / 2, (cross.a.y + cross.b.y) / 2}, 1))
-                        throw std::runtime_error("Red X click placement, move, resize, or selection failed.");
+                        throw std::runtime_error(
+                            "Red X click placement, move, resize, or selection failed.");
                     command(DeleteSelected);
                     command(Undo);
                     if (app.document.items.back().style != style)
@@ -7941,7 +8442,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                         throw std::runtime_error("Redo red X deletion failed.");
                     command(styleCommand(Tool::Check, style));
                     dragImage({450, 20}, {520, 90});
-                    if (app.document.items.back().style != style || app.document.items.back().color != Palette[0] ||
+                    if (app.document.items.back().style != style ||
+                        app.document.items.back().color != Palette[0] ||
                         std::abs(app.document.items.back().bounds().width() - 70) > 2)
                         throw std::runtime_error("Red X drag placement failed.");
                     command(DeleteSelected);
@@ -7980,8 +8482,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     const auto &arrow = app.document.items.back();
                     if (arrow.kind != Tool::Arrow || arrow.style != style ||
                         !arrow.hit(arrow.arrowSpine(.5f), 0))
-                        throw std::runtime_error(
-                            "Outlined, curved, straight, or block gloss arrow placement/selection failed.");
+                        throw std::runtime_error("Outlined, curved, straight, or block gloss arrow "
+                                                 "placement/selection failed.");
                 }
                 const size_t beforeText = app.document.items.size();
                 clickButton(TextTool);
@@ -7989,15 +8491,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 SendMessageW(app.textEdit, WM_CHAR, 'X', 0);
                 dragImage({600, 40}, {600, 40});
                 if (app.textEdit || app.document.editing() || app.tool != Tool::Select ||
-                    app.document.items.size() != beforeText + 1 || app.document.items.back().text != L"X")
-                    throw std::runtime_error("Clicking outside typed text did not commit and return to Select.");
+                    app.document.items.size() != beforeText + 1 ||
+                    app.document.items.back().text != L"X")
+                    throw std::runtime_error(
+                        "Clicking outside typed text did not commit and return to Select.");
                 command(Undo);
                 if (app.document.items.size() != beforeText)
-                    throw std::runtime_error("Click-away text creation was not a single undoable edit.");
+                    throw std::runtime_error(
+                        "Click-away text creation was not a single undoable edit.");
                 clickButton(TextTool);
                 dragImage({250, 270}, {250, 270});
                 if (!app.textEdit || GetFocus() != app.textEdit || !app.document.editing())
-                    throw std::runtime_error("Click-to-type did not open and focus inline text editing.");
+                    throw std::runtime_error(
+                        "Click-to-type did not open and focus inline text editing.");
                 HDC fontDC = GetDC(app.textEdit);
                 HGDIOBJ previousFont = SelectObject(fontDC, app.textEditFont);
                 wchar_t nativeFamily[LF_FACESIZE]{};
@@ -8008,8 +8514,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     throw std::runtime_error("Typing and export use different annotation fonts.");
                 RECT emptyField{};
                 GetClientRect(app.textEdit, &emptyField);
-                if (emptyField.right > 32 || (GetWindowLongPtrW(app.textEdit, GWL_STYLE) & WS_BORDER))
-                    throw std::runtime_error("Empty inline text still shows a wide bordered input bar.");
+                if (emptyField.right > 32 ||
+                    (GetWindowLongPtrW(app.textEdit, GWL_STYLE) & WS_BORDER))
+                    throw std::runtime_error(
+                        "Empty inline text still shows a wide bordered input bar.");
                 auto verifyInline = [&](const wchar_t *path) {
                     RECT field{};
                     GetClientRect(app.textEdit, &field);
@@ -8025,32 +8533,38 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     info.bmiHeader.biBitCount = 32;
                     info.bmiHeader.biCompression = BI_RGB;
                     void *bits = nullptr;
-                    HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+                    HBITMAP bitmap =
+                        CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
                     HDC dc = CreateCompatibleDC(nullptr);
                     if (!bitmap || !bits || !dc)
                     {
-                        if (bitmap) DeleteObject(bitmap);
-                        if (dc) DeleteDC(dc);
+                        if (bitmap)
+                            DeleteObject(bitmap);
+                        if (dc)
+                            DeleteDC(dc);
                         throw std::runtime_error("Cannot capture native inline editor.");
                     }
                     HGDIOBJ previous = SelectObject(dc, bitmap);
                     SendMessageW(app.textEdit, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc),
                                  PRF_CLIENT | PRF_ERASEBKGND);
                     GdiFlush();
-                    std::copy_n(static_cast<const uint8_t *>(bits), native.pixels.size(), native.pixels.begin());
+                    std::copy_n(static_cast<const uint8_t *>(bits), native.pixels.size(),
+                                native.pixels.begin());
                     SelectObject(dc, previous);
                     DeleteDC(dc);
                     DeleteObject(bitmap);
-                    const auto actual = native.sample({float(native.width - 1), float(native.height - 1)});
-                    const auto expected = scene.sample({float(origin.x + native.width - 1), float(origin.y + native.height - 1)});
+                    const auto actual =
+                        native.sample({float(native.width - 1), float(native.height - 1)});
+                    const auto expected = scene.sample(
+                        {float(origin.x + native.width - 1), float(origin.y + native.height - 1)});
                     if (actual != expected)
                     {
                         for (size_t i = 3; i < native.pixels.size(); i += 4)
                             native.pixels[i] = 255;
                         saveBytes(L"smoke-test-inline-failure.png", app.graphics.png(native));
                         throw std::runtime_error("Inline editor background mismatch: actual=" +
-                            std::to_string(actual.value_or(0)) +
-                            " expected=" + std::to_string(expected.value_or(0)));
+                                                 std::to_string(actual.value_or(0)) + " expected=" +
+                                                 std::to_string(expected.value_or(0)));
                     }
                     for (int y = 0; y < native.height; ++y)
                         for (int x = 0; x < native.width; ++x)
@@ -8058,7 +8572,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                                 origin.y + y >= 0 && origin.y + y < scene.height)
                             {
                                 const size_t src = (static_cast<size_t>(y) * native.width + x) * 4;
-                                const size_t dst = (static_cast<size_t>(origin.y + y) * scene.width + origin.x + x) * 4;
+                                const size_t dst =
+                                    (static_cast<size_t>(origin.y + y) * scene.width + origin.x +
+                                     x) *
+                                    4;
                                 std::copy_n(&native.pixels[src], 3, &scene.pixels[dst]);
                             }
                     saveBytes(path, app.graphics.png(scene));
@@ -8069,7 +8586,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 GetClientRect(app.textEdit, &shortField);
                 if (shortField.right <= emptyField.right || shortField.right > 240 ||
                     SendMessageW(app.textEdit, EM_GETLINECOUNT, 0, 0) != 1)
-                    throw std::runtime_error("Inline editor did not grow with its text or wrapped prematurely.");
+                    throw std::runtime_error(
+                        "Inline editor did not grow with its text or wrapped prematurely.");
                 SendMessageW(app.textEdit, WM_CHAR, VK_BACK, 0);
                 RECT deletedField{};
                 GetClientRect(app.textEdit, &deletedField);
@@ -8084,8 +8602,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 if (!app.textEdit || GetFocus() != app.textEdit ||
                     app.document.items.back().text != L"Review this value" ||
                     !app.document.items.back().bold || !app.document.items.back().boxed ||
-                    app.document.items.back().fontSize != 32 || app.document.items.back().color != Palette[4])
-                    throw std::runtime_error("Inline text typing/font/bold/box/color controls failed.");
+                    app.document.items.back().fontSize != 32 ||
+                    app.document.items.back().color != Palette[4])
+                    throw std::runtime_error(
+                        "Inline text typing/font/bold/box/color controls failed.");
                 verifyInline(L"smoke-test-inline-boxed.png");
                 for (int id : {SizeUp, SizeDown})
                 {
@@ -8119,20 +8639,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 SendMessageW(app.textEdit, WM_KEYDOWN, 'B', 0);
                 SendMessageW(app.textEdit, WM_CHAR, 2, 0);
                 const bool boldShortcut = unbolded && app.document.items.back().bold &&
-                    app.document.items.back().text == L"Review this value";
+                                          app.document.items.back().text == L"Review this value";
                 SendMessageW(app.textEdit, WM_KEYDOWN, VK_RETURN, 0);
                 SetKeyboardState(keyboard);
-                if (!boldShortcut || app.textEdit || app.document.editing() || app.tool != Tool::Select ||
-                    app.document.items.size() != beforeText + 1)
+                if (!boldShortcut || app.textEdit || app.document.editing() ||
+                    app.tool != Tool::Select || app.document.items.size() != beforeText + 1)
                     throw std::runtime_error("Ctrl+Enter did not commit the text annotation.");
                 command(Undo);
                 if (app.document.items.size() != beforeText)
                     throw std::runtime_error("Text creation was not one undoable edit.");
                 command(Redo);
                 auto doubleClickText = [&] {
-                    const auto point = app.view.toScreen(app.document.items.back().a + Point{15, 15});
+                    const auto point =
+                        app.view.toScreen(app.document.items.back().a + Point{15, 15});
                     SendMessageW(window, WM_LBUTTONDBLCLK, MK_LBUTTON,
-                        MAKELPARAM(static_cast<int>(point.x * app.dpi), static_cast<int>(point.y * app.dpi)));
+                                 MAKELPARAM(static_cast<int>(point.x * app.dpi),
+                                            static_cast<int>(point.y * app.dpi)));
                     if (!app.textEdit)
                         throw std::runtime_error("Double-click did not reopen text editing.");
                 };
@@ -8140,7 +8662,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 SetWindowTextW(app.textEdit, L"Canceled changes");
                 SendMessageW(app.textEdit, WM_KEYDOWN, VK_ESCAPE, 0);
                 if (app.textEdit || app.document.items.back().text != L"Review this value")
-                    throw std::runtime_error("Canceling text editing failed to restore the original.");
+                    throw std::runtime_error(
+                        "Canceling text editing failed to restore the original.");
                 doubleClickText();
                 SetWindowTextW(app.textEdit, L"Review this value\r\nBefore sharing");
                 updateTextFromEditor();
@@ -8148,7 +8671,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 GetClientRect(app.textEdit, &multilineField);
                 if (SendMessageW(app.textEdit, EM_GETLINECOUNT, 0, 0) != 2 ||
                     multilineField.bottom <= shortField.bottom)
-                    throw std::runtime_error("Inline editor did not grow vertically for a new line.");
+                    throw std::runtime_error(
+                        "Inline editor did not grow vertically for a new line.");
                 verifyInline(L"smoke-test-inline-multiline.png");
                 finishTextEditing();
                 command(Undo);
@@ -8171,7 +8695,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 dragImage({20, 200}, {20, 200});
                 SendMessageW(app.textEdit, WM_KEYDOWN, VK_ESCAPE, 0);
                 if (app.document.items.size() != beforeText + 1 || app.document.editing())
-                    throw std::runtime_error("Canceling empty text left an annotation or pending edit.");
+                    throw std::runtime_error(
+                        "Canceling empty text left an annotation or pending edit.");
                 for (int style = 0; style < 4; ++style)
                 {
                     command(styleCommand(Tool::Rectangle, style));
@@ -8182,7 +8707,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 }
                 command(CircleTool);
                 if (app.tool != Tool::Rectangle)
-                    throw std::runtime_error("Combined shape button did not remember its rectangle choice.");
+                    throw std::runtime_error(
+                        "Combined shape button did not remember its rectangle choice.");
                 for (int id : {CircleStyleMenu, ArrowStyleMenu, CheckStyleMenu, LineStyleMenu})
                 {
                     smokeMenuPreviewPath = L"smoke-test-menu-" + std::to_wstring(id) + L".png";
@@ -8199,22 +8725,28 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 {
                     SendMessageW(window, WM_COMMAND, ProfessionalBorder, 0);
                     updateMenus();
-                    if (app.exportOptions.professionalBorder != border || !app.exportPreferencesDirty ||
-                        bool(GetMenuState(GetMenu(window), ProfessionalBorder, MF_BYCOMMAND) & MF_CHECKED) != border)
-                        throw std::runtime_error("Professional Border Settings toggle or checkmark failed.");
+                    if (app.exportOptions.professionalBorder != border ||
+                        !app.exportPreferencesDirty ||
+                        bool(GetMenuState(GetMenu(window), ProfessionalBorder, MF_BYCOMMAND) &
+                             MF_CHECKED) != border)
+                        throw std::runtime_error(
+                            "Professional Border Settings toggle or checkmark failed.");
                     const auto exported = renderedExport();
                     if (exported.width != app.image.width + (border ? 40 : 0) ||
                         exported.height != app.image.height + (border ? 40 : 0) ||
                         (!border && exported.pixels != flattened.pixels))
-                        throw std::runtime_error("Shared export pipeline did not honor Professional Border.");
-                    app.savePath = border ? L"smoke-test-professional-border.png" : L"smoke-test-border-off.png";
+                        throw std::runtime_error(
+                            "Shared export pipeline did not honor Professional Border.");
+                    app.savePath = border ? L"smoke-test-professional-border.png"
+                                          : L"smoke-test-border-off.png";
                     command(Save);
                     std::ifstream saved(std::filesystem::path(app.savePath), std::ios::binary);
                     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)), {});
                     const auto decoded = app.graphics.decode(bytes);
                     if (decoded.width != exported.width || decoded.height != exported.height ||
                         decoded.pixels != exported.pixels || app.dirty)
-                        throw std::runtime_error("Save PNG did not bake in the selected border effect.");
+                        throw std::runtime_error(
+                            "Save PNG did not bake in the selected border effect.");
                 }
                 command(ProfessionalBorder); // Leave ON to verify saved preferences across process
                                              // exit.
@@ -8287,12 +8819,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     SendMessageW(window, WM_COMMAND, SamtecLogo, 0);
                     updateMenus();
                     if (app.exportOptions.samtecLogo != logo ||
-                        bool(GetMenuState(GetMenu(window), SamtecLogo, MF_BYCOMMAND) & MF_CHECKED) != logo)
-                        throw std::runtime_error("Samtec Logo Settings toggle or checkmark failed.");
+                        bool(GetMenuState(GetMenu(window), SamtecLogo, MF_BYCOMMAND) &
+                             MF_CHECKED) != logo)
+                        throw std::runtime_error(
+                            "Samtec Logo Settings toggle or checkmark failed.");
                     const auto exported = renderedExport();
-                    if (exported.width != app.image.width + 40 || exported.height != app.image.height + 40)
-                        throw std::runtime_error("Samtec Logo changed exported screenshot dimensions.");
-                    app.savePath = logo ? L"smoke-test-samtec-logo.png" : L"smoke-test-samtec-off.png";
+                    if (exported.width != app.image.width + 40 ||
+                        exported.height != app.image.height + 40)
+                        throw std::runtime_error(
+                            "Samtec Logo changed exported screenshot dimensions.");
+                    app.savePath =
+                        logo ? L"smoke-test-samtec-logo.png" : L"smoke-test-samtec-off.png";
                     command(Save);
                     std::ifstream saved(std::filesystem::path(app.savePath), std::ios::binary);
                     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)), {});
@@ -8301,16 +8838,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 }
                 command(SamtecLogo); // Verify the logo setting survives close and full exit.
                 if (GetMenuItemCount(app.logoMenu) != 8)
-                    throw std::runtime_error("Samtec Logo submenu must contain Enabled and six styles.");
+                    throw std::runtime_error(
+                        "Samtec Logo submenu must contain Enabled and six styles.");
                 for (int style = 0; style < 6; ++style)
                 {
                     command(LogoStyleFirst + style);
                     updateMenus();
                     if (!app.exportOptions.samtecLogo || app.exportOptions.samtecStyle != style ||
-                        !(GetMenuState(app.logoMenu, LogoStyleFirst + style, MF_BYCOMMAND) & MF_CHECKED))
-                        throw std::runtime_error("Samtec Logo style selection or radio indicator failed.");
+                        !(GetMenuState(app.logoMenu, LogoStyleFirst + style, MF_BYCOMMAND) &
+                          MF_CHECKED))
+                        throw std::runtime_error(
+                            "Samtec Logo style selection or radio indicator failed.");
                     const auto exported = renderedExport();
-                    app.savePath = L"smoke-test-samtec-style-" + std::to_wstring(style + 1) + L".png";
+                    app.savePath =
+                        L"smoke-test-samtec-style-" + std::to_wstring(style + 1) + L".png";
                     command(Save);
                     std::ifstream saved(std::filesystem::path(app.savePath), std::ios::binary);
                     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)), {});
@@ -8325,8 +8866,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 POINT menuAnchor{20, 40};
                 ClientToScreen(window, &menuAnchor);
                 SetForegroundWindow(window);
-                TrackPopupMenu(app.logoMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                    menuAnchor.x, menuAnchor.y, 0, window, nullptr);
+                TrackPopupMenu(app.logoMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, menuAnchor.x,
+                               menuAnchor.y, 0, window, nullptr);
                 app.shapeMenu = nullptr;
                 if (!smokeMenuPreviewError.empty())
                     throw std::runtime_error(smokeMenuPreviewError);
@@ -8371,10 +8912,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                                 continue; // Compare over the uniform workspace away from its dots.
                             // Centering can place native-size pixels between device pixels.
                             // Compare the source texel under the destination pixel's center.
-                            const int tx = static_cast<int>(std::floor(
-                                ((sx + .5f) / app.dpi - app.view.origin.x + inset) / app.view.scale));
-                            const int ty = static_cast<int>(std::floor(
-                                ((sy + .5f) / app.dpi - app.view.origin.y + inset) / app.view.scale));
+                            const int tx = static_cast<int>(
+                                std::floor(((sx + .5f) / app.dpi - app.view.origin.x + inset) /
+                                           app.view.scale));
+                            const int ty = static_cast<int>(
+                                std::floor(((sy + .5f) / app.dpi - app.view.origin.y + inset) /
+                                           app.view.scale));
                             if (tx < 0 || ty < 0 || tx >= styled.width || ty >= styled.height)
                                 continue;
                             const size_t src = (static_cast<size_t>(ty) * styled.width + tx) * 4;
@@ -8432,7 +8975,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 const auto feedback = renderEditorPreview();
                 if (!app.copyFlashStarted || feedback.pixels == beforeFeedback.pixels ||
                     renderedExport().pixels != beforeFeedbackExport.pixels)
-                    throw std::runtime_error("Copy flash was invisible or changed exported pixels.");
+                    throw std::runtime_error(
+                        "Copy flash was invisible or changed exported pixels.");
                 saveBytes(L"smoke-test-copy-flash.png", app.graphics.png(feedback));
                 app.copyFlashStarted = GetTickCount64() - 400;
                 SendMessageW(window, WM_TIMER, CopyFlashTimer, 0);
@@ -8467,7 +9011,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                     buildButtons();
                     for (const auto &b : app.buttons)
                         if (b.rect.right > bounds.right || (b.rect.bottom > toolbarHeight()))
-                            throw std::runtime_error("Text formatting control is clipped at high DPI.");
+                            throw std::runtime_error(
+                                "Text formatting control is clipped at high DPI.");
                     saveBytes(L"smoke-test-text-layout-" +
                                   std::to_wstring(static_cast<int>(scale * 100)) + L".png",
                               app.graphics.png(renderEditorPreview()));
@@ -8499,8 +9044,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                         updateView();
                         buildButtons();
                         for (const auto &b : app.buttons)
-                            if (
-                                (b.rect.left < 0 || b.rect.right > clientDips().right ||
+                            if ((b.rect.left < 0 || b.rect.right > clientDips().right ||
                                  b.rect.top < 0 || b.rect.bottom > toolbarHeight()))
                                 throw std::runtime_error("Collapsed toolbar controls are clipped.");
                         for (int row = 0; row < 3; ++row)
@@ -8620,10 +9164,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 if (!app.hotkeyControl || !app.instantHotkeyControl ||
                     static_cast<WORD>(SendMessageW(app.hotkeyControl, HKM_GETHOTKEY, 0, 0)) !=
                         app.hotkey ||
-                    static_cast<WORD>(SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0, 0)) !=
-                        app.instantHotkey)
+                    static_cast<WORD>(SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0,
+                                                   0)) != app.instantHotkey)
                     throw std::runtime_error("Shortcut settings initialization failed.");
-                saveBytes(L"smoke-test-shortcuts.png", app.graphics.png(renderNativeWindow(app.settingsWindow)));
+                saveBytes(L"smoke-test-shortcuts.png",
+                          app.graphics.png(renderNativeWindow(app.settingsWindow)));
                 SendMessageW(app.instantHotkeyControl, HKM_SETHOTKEY,
                              MAKEWORD(VK_F21, HOTKEYF_CONTROL | HOTKEYF_ALT), 0);
                 SendMessageW(app.hotkeyControl, HKM_SETHOTKEY,
@@ -8634,11 +9179,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 openSettings();
                 // Exercise actual key entry, rather than just assigning a hotkey value.
                 SendMessageW(app.instantHotkeyControl, HKM_SETHOTKEY, 0, 0);
-                const LPARAM pauseScan = static_cast<LPARAM>(MapVirtualKeyW(VK_PAUSE, MAPVK_VK_TO_VSC)) << 16;
+                const LPARAM pauseScan =
+                    static_cast<LPARAM>(MapVirtualKeyW(VK_PAUSE, MAPVK_VK_TO_VSC)) << 16;
                 SendMessageW(app.instantHotkeyControl, WM_KEYDOWN, VK_PAUSE, pauseScan | 1);
-                SendMessageW(app.instantHotkeyControl, WM_KEYUP, VK_PAUSE, pauseScan | 0xc0000001LL);
+                SendMessageW(app.instantHotkeyControl, WM_KEYUP, VK_PAUSE,
+                             pauseScan | 0xc0000001LL);
                 if (SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0, 0) != VK_PAUSE)
-                    throw std::runtime_error("Shortcut field did not accept Pause without modifiers.");
+                    throw std::runtime_error(
+                        "Shortcut field did not accept Pause without modifiers.");
                 SendMessageW(app.instantHotkeyControl, HKM_SETHOTKEY, 0, 0);
                 SendMessageW(app.instantHotkeyControl, WM_KEYDOWN, VK_PAUSE, (0x45 << 16) | 1);
                 if (SendMessageW(app.instantHotkeyControl, HKM_GETHOTKEY, 0, 0) != VK_PAUSE)
@@ -8646,8 +9194,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 wchar_t pauseLabel[64]{};
                 GetWindowTextW(app.instantHotkeyControl, pauseLabel, 64);
                 if (std::wstring(pauseLabel) != L"Pause")
-                    throw std::runtime_error("Pause shortcut value was stored without a visible label.");
-                saveBytes(L"smoke-test-pause-shortcut.png", app.graphics.png(renderNativeWindow(app.settingsWindow)));
+                    throw std::runtime_error(
+                        "Pause shortcut value was stored without a visible label.");
+                saveBytes(L"smoke-test-pause-shortcut.png",
+                          app.graphics.png(renderNativeWindow(app.settingsWindow)));
                 SendMessageW(app.hotkeyControl, HKM_SETHOTKEY,
                              MAKEWORD(VK_F20, HOTKEYF_CONTROL | HOTKEYF_ALT), 0);
                 auto originalIni = app.iniPath;
@@ -8656,15 +9206,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 app.iniPath = std::wstring(testDirectory) + L"\\smoke-settings.ini";
                 SendMessageW(app.settingsWindow, WM_COMMAND, IDOK, 0);
                 if (app.settingsWindow ||
-                    static_cast<WORD>(GetPrivateProfileIntW(L"Settings", L"Hotkey", 0,
-                                                            app.iniPath.c_str())) != app.hotkey ||
-                    static_cast<WORD>(GetPrivateProfileIntW(L"Settings", L"InstantHotkey", 0,
-                                                            app.iniPath.c_str())) != app.instantHotkey)
+                    static_cast<WORD>(preferenceUInt(app.iniPath, L"Settings", L"Hotkey", 0)) !=
+                        app.hotkey ||
+                    static_cast<WORD>(preferenceUInt(app.iniPath, L"Settings", L"InstantHotkey",
+                                                     0)) != app.instantHotkey)
                     throw std::runtime_error("Shortcut settings save failed.");
                 // Use the Windows input queue and real RegisterHotKey delivery, rather than
                 // sending a WM_HOTKEY directly to the app.
                 MSG hotkeyMessage{};
-                while (PeekMessageW(&hotkeyMessage, window, WM_HOTKEY, WM_HOTKEY, PM_REMOVE)) {}
+                while (PeekMessageW(&hotkeyMessage, window, WM_HOTKEY, WM_HOTKEY, PM_REMOVE))
+                {
+                }
                 INPUT pauseInput[2]{};
                 for (auto &input : pauseInput)
                 {
@@ -8687,14 +9239,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                         }
                     }
                     else
-                        MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                        MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT,
+                                                    MWMO_INPUTAVAILABLE);
                 }
                 if (!delivered)
-                    throw std::runtime_error("Windows did not deliver the registered Pause hotkey.");
+                    throw std::runtime_error(
+                        "Windows did not deliver the registered Pause hotkey.");
                 if (app.overlay || app.capturePending || app.image.empty() ||
                     app.image.width != GetSystemMetrics(SM_CXVIRTUALSCREEN) ||
                     app.image.height != GetSystemMetrics(SM_CYVIRTUALSCREEN))
-                    throw std::runtime_error("Saved Pause shortcut did not trigger instant all-monitor capture.");
+                    throw std::runtime_error(
+                        "Saved Pause shortcut did not trigger instant all-monitor capture.");
                 app.iniPath = originalIni;
                 app.palette = PersistenceTestPalette;
                 app.paletteDirty = true;
@@ -8719,7 +9274,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 const auto closeColors = app.colors;
                 const auto closeStyles = app.styles;
                 if (app.exportOptions.professionalBlur)
-                    command(ProfessionalBlur); // Persist a custom rounded-only combination on every run.
+                    command(ProfessionalBlur); // Persist a custom rounded-only combination on every
+                                               // run.
                 changeTextFormatting(40, true, true);
                 beginTextEditing({20, 20});
                 SendMessageW(app.textEdit, WM_CHAR, 'X', 0);
@@ -8739,13 +9295,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 app.exportOptions.samtecStyle = 0;
                 const auto closedTool = app.tool;
                 loadToolPreferences();
-                if (app.colors != closeColors || app.styles != closeStyles || app.tool != closedTool)
-                    throw std::runtime_error("Closing lost tool colors/styles or changed the active tool.");
-                if (app.fontSize != 40 || !app.textBold || !app.textBox || app.geometryTool != Tool::Rectangle ||
-                    !app.exportOptions.professionalBorder || !app.exportOptions.samtecLogo || app.collapsedRows != 6 ||
+                if (app.colors != closeColors || app.styles != closeStyles ||
+                    app.tool != closedTool)
+                    throw std::runtime_error(
+                        "Closing lost tool colors/styles or changed the active tool.");
+                if (app.fontSize != 40 || !app.textBold || !app.textBox ||
+                    app.geometryTool != Tool::Rectangle || !app.exportOptions.professionalBorder ||
+                    !app.exportOptions.samtecLogo || app.collapsedRows != 6 ||
                     app.exportOptions.professionalBlur || !app.exportOptions.professionalRounded ||
                     app.exportOptions.samtecStyle != 5)
-                    throw std::runtime_error("Text formatting or geometry group preferences were lost.");
+                    throw std::runtime_error(
+                        "Text formatting or geometry group preferences were lost.");
                 // A later change must be written by the full-exit path, not the earlier close.
                 app.image = Bitmap::create(10, 10);
                 command(styleCommand(Tool::Check, 5));
@@ -8755,43 +9315,73 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
                 app.dirty = true; // The final File > Exit must also proceed without a prompt.
                 writeTestReport(
                     L"smoke-test-results.txt",
-                    "PASS: unsaved new snips, closing, and File > Exit proceed without save confirmation, "
-                    "closing retains committed edits in session history, repeated capture shortcuts ignored, "
+                    "PASS: unsaved new snips, closing, and File > Exit proceed without save "
+                    "confirmation, "
+                    "closing retains committed edits in session history, repeated capture "
+                    "shortcuts ignored, "
                     "no editor/fade pixels in capture, restored editor with Pen selected, "
                     "instant hotkey freezes focus-dismissed hover popup pixels before selection, "
-                    "instant all-monitor capture preserves hover menus and pointer with visible/hidden and edited/unedited snips, "
-                    "two independent shortcuts with swaps, duplicate/conflict rollback and disable, explicit Pause key entry, Pause key, real Windows Pause hotkey delivery, save/capture, undoable editor crop with translated annotations, "
-                    "nested crops, reverse-direction mouse selection, DPI scaling, cancellation and PNG fidelity, "
+                    "instant all-monitor capture preserves hover menus and pointer with "
+                    "visible/hidden and edited/unedited snips, "
+                    "two independent shortcuts with swaps, duplicate/conflict rollback and "
+                    "disable, explicit Pause key entry, Pause key, real Windows Pause hotkey "
+                    "delivery, save/capture, undoable editor crop with translated annotations, "
+                    "nested crops, reverse-direction mouse selection, DPI scaling, cancellation "
+                    "and PNG fidelity, "
                     "visible and hidden editor, instant cancellation preserves the previous snip, "
                     "native window, Direct2D editor, live desktop capture, selection overlay "
-                    "original pixels, mouse rectangle selection and cropping, mouse drawing, yellow chisel highlight, "
-                    "highlight toolbar/shortcut, transparency, cancellation, recoloring, width, history, export, and persistence, all "
-                    "stickers, red X click/drag/move/resize/delete/undo/redo, check/X default and custom colors, "
+                    "original pixels, mouse rectangle selection and cropping, mouse drawing, "
+                    "yellow chisel highlight, "
+                    "highlight toolbar/shortcut, transparency, cancellation, recoloring, width, "
+                    "history, export, and persistence, all "
+                    "stickers, red X click/drag/move/resize/delete/undo/redo, check/X default and "
+                    "custom colors, "
                     "solid/dashed/dotted lines and endpoint editing, outlined/curved "
                     "arrows, straight and block gloss arrows, "
-                    "move/resize/recolor, arrow endpoint rotation, delete, held +/- font/brush repeat, bounds, pause/resume, cancellation, single-step undo, toolbar press/release "
+                    "move/resize/recolor, arrow endpoint rotation, delete, held +/- font/brush "
+                    "repeat, bounds, pause/resume, cancellation, single-step undo, toolbar "
+                    "press/release "
                     "and cancellation, mouse undo/redo, eyedropper toolbar/shortcut/cancel, "
-                    "sampling image and annotation colors at multiple zoom levels, undoable picker recolor, "
-                    "pen cursor color and size, click-to-type text, click-away commits and returns to Select, "
-                    "matching native/export annotation typefaces, auto-sized borderless inline editing, "
-                    "native plain/boxed/multiline typing backgrounds, growth/deletion/line wrapping, "
+                    "sampling image and annotation colors at multiple zoom levels, undoable picker "
+                    "recolor, "
+                    "pen cursor color and size, click-to-type text, click-away commits and returns "
+                    "to Select, "
+                    "matching native/export annotation typefaces, auto-sized borderless inline "
+                    "editing, "
+                    "native plain/boxed/multiline typing backgrounds, growth/deletion/line "
+                    "wrapping, "
                     "live font/bold/color/box formatting, "
-                    "Ctrl+Enter, double-click editing, Escape rollback, text undo/redo/move/resize, "
-                    "rectangle styles, native visual shape dropdowns, compact text layouts at 100/150/200% DPI, "
+                    "Ctrl+Enter, double-click editing, Escape rollback, text "
+                    "undo/redo/move/resize, "
+                    "rectangle styles, native visual shape dropdowns, compact text layouts at "
+                    "100/150/200% DPI, "
                     "annotated PNG export, Professional Border Settings toggle/checkmark, "
-                    "actual PNG save with every independent blur/rounding combination, professional submenu and persistence, Samtec Logo toggle/checkmark, six visual styles and PNG Save, "
-                    "styled preview/export equality for all settings and logo styles, alpha compositing, cache invalidation, copy flash visibility, expiry, and unchanged exports, "
-                    "save location menu, folder preference, existing-file preservation, unavailable-folder fallback, "
-                    "PNG save in configured folder, plain wheel zoom, fitted minimum and 800% maximum, hand panning, bounded edges, centered fitting axes, annotation hit priority, "
-                    "all collapsed row combinations at 100/150/200% DPI, full screen F11/Esc and window restoration, "
-                    "rendering dialog Apply/Cancel, live hardware/software switching and saved preference, "
-                    "unchanged snip/annotations/history/selection/view/export during renderer changes, "
+                    "actual PNG save with every independent blur/rounding combination, "
+                    "professional submenu and persistence, Samtec Logo toggle/checkmark, six "
+                    "visual styles and PNG Save, "
+                    "styled preview/export equality for all settings and logo styles, alpha "
+                    "compositing, cache invalidation, copy flash visibility, expiry, and unchanged "
+                    "exports, "
+                    "save location menu, folder preference, existing-file preservation, "
+                    "unavailable-folder fallback, "
+                    "PNG save in configured folder, plain wheel zoom, fitted minimum and 800% "
+                    "maximum, hand panning, bounded edges, centered fitting axes, annotation hit "
+                    "priority, "
+                    "all collapsed row combinations at 100/150/200% DPI, full screen F11/Esc and "
+                    "window restoration, "
+                    "rendering dialog Apply/Cancel, live hardware/software switching and saved "
+                    "preference, "
+                    "unchanged snip/annotations/history/selection/view/export during renderer "
+                    "changes, "
                     "settings dialog and persistence, per-tool styles/custom colors "
                     "saved on close, selected-shape recoloring remembers the correct tool.\n");
                 SetTimer(window, SmokeTimer, 1000, nullptr);
             }
             MSG message{};
-            while (GetMessageW(&message, nullptr, 0, 0) > 0)
+            while ([&] {
+                const int received = GetMessageW(&message, nullptr, 0, 0);
+                return messageAvailable(received, received == -1 ? GetLastError() : 0);
+            }())
             {
                 if (app.settingsWindow && IsDialogMessageW(app.settingsWindow, &message))
                     continue;
@@ -8805,10 +9395,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     catch (const std::exception &exception)
     {
         result = 1;
-        if (selfTest || app.smoke || verifyPreferences || verifyPalette || penSizeTest || verifyPenSize || app.resizeTest)
-            writeTestReport(recentTest ? L"recent-test-results.txt" : arrowEditTest ? L"arrow-edit-test-results.txt" : penSizeTest ? L"pen-size-test-results.txt" : verifyPenSize ? L"pen-size-preference-results.txt" : eraserTest ? L"eraser-test-results.txt" : verifyPalette ? L"palette-preference-results.txt" : paletteTest ? L"palette-test-results.txt" : navigationTest ? L"navigation-test-results.txt" : shortcutTest ? L"shortcut-test-results.txt" : app.resizeTest ? L"resize-test-results.txt" : verifyPreferences ? L"preference-test-results.txt" :
-                            selfTest ? L"self-test-results.txt" : L"smoke-test-results.txt",
-                            std::string("FAIL: ") + exception.what() + "\n");
+        if (selfTest || app.smoke || verifyPreferences || verifyPalette || penSizeTest ||
+            verifyPenSize || app.resizeTest)
+            failedTestReport(testReportDirectory /
+                                 (recentTest          ? L"recent-test-results.txt"
+                                  : arrowEditTest     ? L"arrow-edit-test-results.txt"
+                                  : penSizeTest       ? L"pen-size-test-results.txt"
+                                  : verifyPenSize     ? L"pen-size-preference-results.txt"
+                                  : eraserTest        ? L"eraser-test-results.txt"
+                                  : verifyPalette     ? L"palette-preference-results.txt"
+                                  : paletteTest       ? L"palette-test-results.txt"
+                                  : navigationTest    ? L"navigation-test-results.txt"
+                                  : shortcutTest      ? L"shortcut-test-results.txt"
+                                  : app.resizeTest    ? L"resize-test-results.txt"
+                                  : verifyPreferences ? L"preference-test-results.txt"
+                                  : selfTest          ? L"self-test-results.txt"
+                                                      : L"smoke-test-results.txt"),
+                             exception.what());
         else
             error(app.window, exception.what());
         if (app.window && IsWindow(app.window))
@@ -8823,6 +9426,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
     app.graphics.roundStroke.reset();
     app.graphics.dashStroke.reset();
     app.graphics.dotStroke.reset();
+    app.graphics.labelFont.reset();
     app.graphics.titleFont.reset();
     app.graphics.smallFont.reset();
     app.graphics.font.reset();
@@ -8834,4 +9438,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
         CloseHandle(mutex);
     CoUninitialize();
     return result;
+}
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show)
+{
+    return callbackBoundary<int>([&] { return applicationMain(instance, show); },
+                                 [](const char *failure) { showError(nullptr, failure); }, 1);
 }

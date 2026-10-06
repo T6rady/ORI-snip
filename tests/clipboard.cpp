@@ -19,7 +19,7 @@ int wmain()
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         if (!station || !SetProcessWindowStation(station))
             throw std::runtime_error("Cannot create isolated clipboard window station.");
-        desktop = CreateDesktopW(L"JackSnipClipboardTest", nullptr, nullptr, 0,
+        desktop = CreateDesktopW(L"TigerSnipClipboardTest", nullptr, nullptr, 0,
                                  DESKTOP_CREATEWINDOW | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS,
                                  nullptr);
         if (!desktop || !SetThreadDesktop(desktop))

@@ -1,5 +1,9 @@
 #pragma once
 #include "model.h"
+#include "windows_support.h"
+#include "capture.h"
+#include "clipboard.h"
+#include "file_io.h"
 #include <windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -46,7 +50,6 @@ template <class T> class Com
         }
     }
 };
-void check(HRESULT result, const char *operation);
 D2D1_COLOR_F color(Color value, float alpha = 1);
 Color textBackground(Color foreground);
 struct ExportOptions
@@ -84,7 +87,4 @@ class Graphics
     Bitmap samtecBadge(uint8_t style, int logoHeight = 48, bool lightWatermark = false);
     void test();
 };
-Bitmap captureDesktop(int x, int y, int width, int height, bool includeCursor = false);
-void saveBytes(const std::wstring &path, const std::vector<uint8_t> &bytes);
-bool copyBitmap(HWND owner, const Bitmap &bitmap, const std::vector<uint8_t> &png);
 } // namespace snip

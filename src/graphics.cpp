@@ -1,4 +1,6 @@
 #include "graphics.h"
+#include "file_io.h"
+#include "test_hooks.h"
 #include <objbase.h>
 #include <cstring>
 #include <stdexcept>
@@ -6,11 +8,6 @@
 
 namespace snip
 {
-void check(HRESULT hr, const char *operation)
-{
-    if (FAILED(hr))
-        throw std::runtime_error(operation);
-}
 D2D1_COLOR_F color(Color c, float alpha)
 {
     return D2D1::ColorF((c & 255) / 255.0f, ((c >> 8) & 255) / 255.0f, ((c >> 16) & 255) / 255.0f,
@@ -20,48 +17,73 @@ void Graphics::initialize()
 {
     if (factory)
         return;
-    check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, factory.put()),
+    Graphics ready;
+    check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, ready.factory.put()),
           "Cannot initialize Direct2D.");
+#ifdef TIGER_SNIP_TESTING
+    if (testing::graphicsCheckpoint)
+        testing::graphicsCheckpoint(1);
+#endif
     check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                              reinterpret_cast<IUnknown **>(textFactory.put())),
+                              reinterpret_cast<IUnknown **>(ready.textFactory.put())),
           "Cannot initialize text rendering.");
     Com<IDWriteFontCollection> fonts;
-    check(textFactory->GetSystemFontCollection(fonts.put()), "Cannot find annotation fonts.");
+    check(ready.textFactory->GetSystemFontCollection(fonts.put()), "Cannot find annotation fonts.");
     UINT fontIndex = 0;
     BOOL hasBahnschrift = FALSE;
     check(fonts->FindFamilyName(L"Bahnschrift", &fontIndex, &hasBahnschrift),
           "Cannot find annotation typeface.");
     if (hasBahnschrift)
-        annotationFontFamily = L"Bahnschrift";
+        ready.annotationFontFamily = L"Bahnschrift";
     auto makeFont = [&](Com<IDWriteTextFormat> &f, float size, DWRITE_FONT_WEIGHT weight) {
-        check(textFactory->CreateTextFormat(L"Segoe UI", nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
-                                            DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", f.put()),
+        check(ready.textFactory->CreateTextFormat(
+                  L"Segoe UI", nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+                  DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", f.put()),
               "Cannot create UI font.");
-        f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        check(f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER), "Cannot align UI font.");
+        check(f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP), "Cannot configure UI font.");
     };
-    makeFont(font, 13, DWRITE_FONT_WEIGHT_MEDIUM);
-    makeFont(smallFont, 12, DWRITE_FONT_WEIGHT_NORMAL);
-    makeFont(titleFont, 28, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    makeFont(labelFont, 10, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    check(factory->CreateStrokeStyle(
+    makeFont(ready.font, 13, DWRITE_FONT_WEIGHT_MEDIUM);
+    makeFont(ready.smallFont, 12, DWRITE_FONT_WEIGHT_NORMAL);
+    makeFont(ready.titleFont, 28, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    makeFont(ready.labelFont, 10, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+#ifdef TIGER_SNIP_TESTING
+    if (testing::graphicsCheckpoint)
+        testing::graphicsCheckpoint(2);
+#endif
+    check(ready.factory->CreateStrokeStyle(
               D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
                                           D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND),
-              nullptr, 0, roundStroke.put()),
+              nullptr, 0, ready.roundStroke.put()),
           "Cannot initialize brush strokes.");
-    auto dashed = D2D1::StrokeStyleProperties(
-        D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
-        D2D1_LINE_JOIN_ROUND, 10.0f, D2D1_DASH_STYLE_DASH);
-    check(factory->CreateStrokeStyle(dashed, nullptr, 0, dashStroke.put()),
+    auto dashed = D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                                              D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND, 10.0f,
+                                              D2D1_DASH_STYLE_DASH);
+    check(ready.factory->CreateStrokeStyle(dashed, nullptr, 0, ready.dashStroke.put()),
           "Cannot initialize dashed strokes.");
     dashed.dashStyle = D2D1_DASH_STYLE_DOT;
-    check(factory->CreateStrokeStyle(dashed, nullptr, 0, dotStroke.put()),
+    check(ready.factory->CreateStrokeStyle(dashed, nullptr, 0, ready.dotStroke.put()),
           "Cannot initialize dotted strokes.");
+#ifdef TIGER_SNIP_TESTING
+    if (testing::graphicsCheckpoint)
+        testing::graphicsCheckpoint(3);
+#endif
+    // Publish only a complete resource set. Failure leaves this instance retryable.
+    factory = std::move(ready.factory);
+    textFactory = std::move(ready.textFactory);
+    font = std::move(ready.font);
+    smallFont = std::move(ready.smallFont);
+    titleFont = std::move(ready.titleFont);
+    labelFont = std::move(ready.labelFont);
+    roundStroke = std::move(ready.roundStroke);
+    dashStroke = std::move(ready.dashStroke);
+    dotStroke = std::move(ready.dotStroke);
+    annotationFontFamily.swap(ready.annotationFontFamily);
 }
 Color textBackground(Color foreground)
 {
-    const unsigned brightness = (foreground & 255) * 213 +
-        ((foreground >> 8) & 255) * 715 + ((foreground >> 16) & 255) * 72;
+    const unsigned brightness = (foreground & 255) * 213 + ((foreground >> 8) & 255) * 715 +
+                                ((foreground >> 16) & 255) * 72;
     return brightness > 170000 ? rgb(35, 39, 56) : rgb(255, 255, 255);
 }
 Com<IDWriteTextLayout> Graphics::textLayout(const Annotation &item)
@@ -69,14 +91,17 @@ Com<IDWriteTextLayout> Graphics::textLayout(const Annotation &item)
     initialize();
     Com<IDWriteTextFormat> format;
     check(textFactory->CreateTextFormat(annotationFontFamily.c_str(), nullptr,
-        item.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, item.fontSize,
-        L"en-us", format.put()), "Cannot create annotation font.");
+                                        item.bold ? DWRITE_FONT_WEIGHT_BOLD
+                                                  : DWRITE_FONT_WEIGHT_NORMAL,
+                                        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                                        item.fontSize, L"en-us", format.put()),
+          "Cannot create annotation font.");
     Com<IDWriteTextLayout> layout;
     const std::wstring content = item.text.empty() ? L" " : item.text;
     check(textFactory->CreateTextLayout(content.c_str(), static_cast<UINT32>(content.size()),
-        format.get(), std::max(1.0f, item.textWidth), 16384, layout.put()),
-        "Cannot lay out annotation text.");
+                                        format.get(), std::max(1.0f, item.textWidth), 16384,
+                                        layout.put()),
+          "Cannot lay out annotation text.");
     return layout;
 }
 void Graphics::measureText(Annotation &item)
@@ -106,8 +131,7 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
         };
         switch (item.kind)
         {
-        case Tool::Text:
-        {
+        case Tool::Text: {
             if (item.text.empty() && static_cast<int>(index) != editingText)
                 break;
             const float padding = item.boxed ? 12 : 0;
@@ -125,9 +149,9 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             rt->DrawTextLayout({item.a.x + padding, item.a.y + padding}, layout.get(), brush.get());
             break;
         }
-        case Tool::Rectangle:
-        {
-            const float radius = item.style == 0 ? 0 : std::min({12.0f, r.width() / 4, r.height() / 4});
+        case Tool::Rectangle: {
+            const float radius =
+                item.style == 0 ? 0 : std::min({12.0f, r.width() / 4, r.height() / 4});
             auto box = D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, radius, radius);
             if (item.style >= 2)
             {
@@ -138,8 +162,7 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             rt->DrawRoundedRectangle(box, brush.get(), width, roundStroke.get());
             break;
         }
-        case Tool::Highlight:
-        {
+        case Tool::Highlight: {
             if (item.points.empty())
                 break;
             Com<ID2D1PathGeometry> path;
@@ -180,8 +203,7 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
                 rt->DrawGeometry(path.get(), brush.get(), width, roundStroke.get());
             }
             break;
-        case Tool::Circle:
-        {
+        case Tool::Circle: {
             auto ellipse = D2D1::Ellipse({(r.left + r.right) / 2, (r.top + r.bottom) / 2},
                                          r.width() / 2, r.height() / 2);
             if (item.style == 1)
@@ -213,16 +235,21 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
                 check(sink->Close(), "Cannot finish arrow geometry.");
                 rt->FillGeometry(path.get(), brush.get());
                 brush->SetColor(color(rgb(12, 12, 16)));
-                rt->DrawGeometry(path.get(), brush.get(), std::min(len * .06f, std::max(1.2f, width * .45f)),
+                rt->DrawGeometry(path.get(), brush.get(),
+                                 std::min(len * .06f, std::max(1.2f, width * .45f)),
                                  item.style == 4 ? nullptr : roundStroke.get());
                 if (item.style == 2 || item.style == 3 || item.style == 4)
                 {
                     const Color c = item.color;
                     brush->SetColor(color(rgb((c & 255) / 2 + 127, ((c >> 8) & 255) / 2 + 127,
-                                             ((c >> 16) & 255) / 2 + 127), .85f));
+                                              ((c >> 16) & 255) / 2 + 127),
+                                          .85f));
                     Point previous = item.arrowSpine(.22f);
                     float end = std::clamp(1 - std::min(len * .45f,
-                        std::max({22.0f, width * 6, len * .18f})) / len, .55f, .84f) * .88f;
+                                                        std::max({22.0f, width * 6, len * .18f})) /
+                                                   len,
+                                           .55f, .84f) *
+                                .88f;
                     for (int i = 1; i <= 32; ++i)
                     {
                         Point next = item.arrowSpine(.22f + (end - .22f) * i / 32.0f);
@@ -246,7 +273,9 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
         }
         case Tool::Line:
             line(item.a, item.b, width,
-                 item.style == 1 ? dashStroke.get() : item.style == 2 ? dotStroke.get() : nullptr);
+                 item.style == 1   ? dashStroke.get()
+                 : item.style == 2 ? dotStroke.get()
+                                   : nullptr);
             break;
         case Tool::Check: {
             float w = r.width(), h = r.height(), stroke = std::max(1.0f, std::min(w, h) * .06f);
@@ -264,17 +293,17 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
             const float markStroke = stroke * (badge == 2 ? 1.8f : 1.4f);
             if (cross)
             {
-                line({r.left + w * .28f, r.top + h * .28f},
-                     {r.left + w * .72f, r.top + h * .72f}, markStroke);
-                line({r.left + w * .72f, r.top + h * .28f},
-                     {r.left + w * .28f, r.top + h * .72f}, markStroke);
+                line({r.left + w * .28f, r.top + h * .28f}, {r.left + w * .72f, r.top + h * .72f},
+                     markStroke);
+                line({r.left + w * .72f, r.top + h * .28f}, {r.left + w * .28f, r.top + h * .72f},
+                     markStroke);
             }
             else
             {
-                line({r.left + w * .23f, r.top + h * .52f},
-                     {r.left + w * .43f, r.top + h * .72f}, markStroke);
-                line({r.left + w * .43f, r.top + h * .72f},
-                     {r.left + w * .79f, r.top + h * .28f}, markStroke);
+                line({r.left + w * .23f, r.top + h * .52f}, {r.left + w * .43f, r.top + h * .72f},
+                     markStroke);
+                line({r.left + w * .43f, r.top + h * .72f}, {r.left + w * .79f, r.top + h * .28f},
+                     markStroke);
             }
             break;
         }
@@ -427,15 +456,19 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
         for (int y = -halo; y < height + halo; ++y)
             for (int x = -halo; x < width + halo; ++x)
             {
-                const double alpha = x >= 0 && x < width && y >= 0 && y < height
-                    ? resized.pixels[(static_cast<size_t>(y) * width + x) * 4 + 3] / 255.0 : 0;
+                const double alpha =
+                    x >= 0 && x < width && y >= 0 && y < height
+                        ? resized.pixels[(static_cast<size_t>(y) * width + x) * 4 + 3] / 255.0
+                        : 0;
                 double glow = 0;
                 for (int dy = -2; dy <= 2; ++dy)
                     for (int dx = -2; dx <= 2; ++dx)
                         if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height)
                         {
-                            const double nearby = resized.pixels[
-                                (static_cast<size_t>(y + dy) * width + x + dx) * 4 + 3] / 255.0;
+                            const double nearby =
+                                resized.pixels[(static_cast<size_t>(y + dy) * width + x + dx) * 4 +
+                                               3] /
+                                255.0;
                             glow = std::max(glow, nearby * std::exp(-(dx * dx + dy * dy) / 2.0));
                         }
                 compositePixel(watermark, x + halo, y + halo, edge, glow * (1 - alpha) * .10);
@@ -507,7 +540,9 @@ void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
                 const size_t i = (static_cast<size_t>(y) * image.width + x) * 4;
                 const double alpha = image.pixels[i + 3] / 255.0;
                 luminance += (.2126 * image.pixels[i + 2] + .7152 * image.pixels[i + 1] +
-                              .0722 * image.pixels[i]) * alpha + 255 * (1 - alpha);
+                              .0722 * image.pixels[i]) *
+                                 alpha +
+                             255 * (1 - alpha);
                 ++samples;
             }
         if (luminance / samples < 128)
@@ -702,183 +737,6 @@ Bitmap Graphics::decode(const std::vector<uint8_t> &bytes)
           "Decode pixels failed.");
     return result;
 }
-Bitmap captureDesktop(int x, int y, int width, int height, bool includeCursor)
-{
-    auto result = Bitmap::create(width, height);
-    HDC screen = GetDC(nullptr);
-    if (!screen)
-        throw std::runtime_error("Cannot access the desktop.");
-    HDC memory = CreateCompatibleDC(screen);
-    BITMAPINFO info{};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-    void *pixels = nullptr;
-    HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
-    if (!memory || !bitmap)
-    {
-        if (memory)
-            DeleteDC(memory);
-        if (bitmap)
-            DeleteObject(bitmap);
-        ReleaseDC(nullptr, screen);
-        throw std::runtime_error("Cannot allocate the screen capture.");
-    }
-    auto previous = SelectObject(memory, bitmap);
-    CURSORINFO cursor{};
-    cursor.cbSize = sizeof(cursor);
-    HICON cursorCopy = nullptr;
-    ICONINFO cursorIcon{};
-    if (includeCursor && GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING))
-    {
-        cursorCopy = CopyIcon(cursor.hCursor);
-        if (cursorCopy)
-            GetIconInfo(cursorCopy, &cursorIcon);
-    }
-    BOOL success = BitBlt(memory, 0, 0, width, height, screen, x, y, SRCCOPY | CAPTUREBLT);
-    if (success && cursorCopy && cursorIcon.hbmMask)
-        DrawIconEx(memory, cursor.ptScreenPos.x - x - cursorIcon.xHotspot,
-                   cursor.ptScreenPos.y - y - cursorIcon.yHotspot,
-                   cursorCopy, 0, 0, 0, nullptr, DI_NORMAL);
-    if (cursorIcon.hbmColor) DeleteObject(cursorIcon.hbmColor);
-    if (cursorIcon.hbmMask) DeleteObject(cursorIcon.hbmMask);
-    if (cursorCopy) DestroyIcon(cursorCopy);
-    GdiFlush();
-    if (success)
-        std::memcpy(result.pixels.data(), pixels, result.pixels.size());
-    SelectObject(memory, previous);
-    DeleteObject(bitmap);
-    DeleteDC(memory);
-    ReleaseDC(nullptr, screen);
-    if (!success)
-        throw std::runtime_error("Windows could not capture the desktop.");
-    for (size_t i = 3; i < result.pixels.size(); i += 4)
-        result.pixels[i] = 255;
-    return result;
-}
-void saveBytes(const std::wstring &path, const std::vector<uint8_t> &bytes)
-{
-    // Write beside the destination, then atomically replace it so failed saves preserve the old
-    // file.
-    std::wstring temporary =
-        path + L".jack-snip-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
-    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE)
-        throw std::runtime_error("Cannot write this location. Choose another folder.");
-    DWORD written = 0;
-    bool success =
-        WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
-        written == bytes.size() && FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!success || !MoveFileExW(temporary.c_str(), path.c_str(),
-                                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-    {
-        DeleteFileW(temporary.c_str());
-        throw std::runtime_error(
-            "Could not finish saving the PNG. The original file was preserved.");
-    }
-}
-bool copyBitmap(HWND owner, const Bitmap &bitmap, const std::vector<uint8_t> &png)
-{
-    const size_t imageSize = bitmap.pixels.size();
-    auto allocate = [&](const void *header, size_t headerSize, const uint8_t *pixels,
-                        size_t count) -> HGLOBAL {
-        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, headerSize + count);
-        if (!memory)
-            return nullptr;
-        auto data = static_cast<uint8_t *>(GlobalLock(memory));
-        if (!data)
-        {
-            GlobalFree(memory);
-            return nullptr;
-        }
-        if (headerSize)
-            std::memcpy(data, header, headerSize);
-        std::memcpy(data + headerSize, pixels, count);
-        GlobalUnlock(memory);
-        return memory;
-    };
-    BITMAPV5HEADER v5{};
-    v5.bV5Size = sizeof(v5);
-    v5.bV5Width = bitmap.width;
-    v5.bV5Height = -bitmap.height;
-    v5.bV5Planes = 1;
-    v5.bV5BitCount = 32;
-    v5.bV5Compression = BI_BITFIELDS;
-    v5.bV5SizeImage = static_cast<DWORD>(imageSize);
-    v5.bV5RedMask = 0x00ff0000;
-    v5.bV5GreenMask = 0x0000ff00;
-    v5.bV5BlueMask = 0x000000ff;
-    v5.bV5AlphaMask = 0xff000000;
-    v5.bV5CSType = LCS_sRGB;
-    v5.bV5Intent = LCS_GM_IMAGES;
-    BITMAPINFOHEADER dib{};
-    dib.biSize = sizeof(dib);
-    dib.biWidth = bitmap.width;
-    dib.biHeight = -bitmap.height;
-    dib.biPlanes = 1;
-    dib.biBitCount = 32;
-    dib.biCompression = BI_RGB;
-    dib.biSizeImage = static_cast<DWORD>(imageSize);
-    HGLOBAL hV5 = allocate(&v5, sizeof(v5), bitmap.pixels.data(), imageSize),
-            hDib = allocate(&dib, sizeof(dib), bitmap.pixels.data(), imageSize),
-            hPng = allocate(nullptr, 0, png.data(), png.size());
-    if (!hV5 || !hDib || !hPng)
-    {
-        if (hV5)
-            GlobalFree(hV5);
-        if (hDib)
-            GlobalFree(hDib);
-        if (hPng)
-            GlobalFree(hPng);
-        throw std::runtime_error("Not enough memory to copy the image.");
-    }
-    UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-    if (!OpenClipboard(owner))
-    {
-        GlobalFree(hV5);
-        GlobalFree(hDib);
-        GlobalFree(hPng);
-        return false;
-    }
-    if (!EmptyClipboard())
-    {
-        CloseClipboard();
-        GlobalFree(hV5);
-        GlobalFree(hDib);
-        GlobalFree(hPng);
-        return false;
-    }
-    bool success = false;
-    // Advertise the lossless alpha-preserving format first to clipboard consumers.
-    if (pngFormat && SetClipboardData(pngFormat, hPng))
-    {
-        hPng = nullptr;
-        success = true;
-    }
-    if (SetClipboardData(CF_DIBV5, hV5))
-    {
-        hV5 = nullptr;
-        success = true;
-    }
-    if (SetClipboardData(CF_DIB, hDib))
-    {
-        hDib = nullptr;
-        success = true;
-    }
-    CloseClipboard();
-    if (hV5)
-        GlobalFree(hV5);
-    if (hDib)
-        GlobalFree(hDib);
-    if (hPng)
-        GlobalFree(hPng);
-    return success;
-}
 void Graphics::test()
 {
     runModelTests();
@@ -903,7 +761,8 @@ void Graphics::test()
             highlighted.sample({80, 50}) != highlighted.sample({120, 50}) ||
             highlighted.sample({80, 65}) != rgb(255, 255, 255) ||
             decode(png(highlighted)).pixels != highlighted.pixels)
-            throw std::runtime_error("Highlight transparency, stroke overlap, clipping, or PNG round trip failed.");
+            throw std::runtime_error(
+                "Highlight transparency, stroke overlap, clipping, or PNG round trip failed.");
         highlight.points = {{80, 50}};
         const auto chisel = flatten(source, {highlight});
         if (!nearColor(*chisel.sample({80, 42}), rgb(253, 237, 173)) ||
@@ -911,7 +770,8 @@ void Graphics::test()
             throw std::runtime_error("Highlight nib is not a broad slanted chisel.");
         auto textSource = source;
         const size_t blackPixel = (50 * 160 + 80) * 4;
-        textSource.pixels[blackPixel] = textSource.pixels[blackPixel + 1] = textSource.pixels[blackPixel + 2] = 0;
+        textSource.pixels[blackPixel] = textSource.pixels[blackPixel + 1] =
+            textSource.pixels[blackPixel + 2] = 0;
         const auto readable = flatten(textSource, {highlight});
         if (!nearColor(*readable.sample({80, 50}), rgb(88, 71, 7)))
             throw std::runtime_error("Highlight obscured the underlying text.");
@@ -932,7 +792,8 @@ void Graphics::test()
         Annotation blue = highlight;
         blue.color = rgb(14, 165, 233);
         blue.points = {{40, 140}, {250, 140}, {320, 110}, {400, 170}, {575, 145}};
-        saveBytes(L"highlight-preview.png", png(flatten(highlightPreview, {label, highlight, blue})));
+        saveBytes(L"highlight-preview.png",
+                  png(flatten(highlightPreview, {label, highlight, blue})));
     }
     Annotation pen;
     pen.kind = Tool::Pen;
@@ -982,8 +843,8 @@ void Graphics::test()
     auto stickerPreview = Bitmap::create(720, 240);
     std::fill(stickerPreview.pixels.begin(), stickerPreview.pixels.end(), 255);
     std::vector<Annotation> stickers;
-    const wchar_t *stickerNames[] = {L"Boxed check", L"Circle badge", L"Simple check",
-                                    L"Boxed X", L"Circle X badge", L"Simple X"};
+    const wchar_t *stickerNames[] = {L"Boxed check", L"Circle badge",   L"Simple check",
+                                     L"Boxed X",     L"Circle X badge", L"Simple X"};
     for (int style = 0; style < 6; ++style)
     {
         auto sticker = mark;
@@ -995,15 +856,17 @@ void Graphics::test()
             sticker.b = {20.0f + side, 20.0f + side};
             const auto rendered = flatten(source, {sticker});
             const Point center{20.0f + side * .5f, 20.0f + side * .5f};
-            if ((style >= 3 && (rendered.sample(center) != sticker.color ||
-                               rendered.sample({20.0f + side * .3f, 20.0f + side * .3f}) != sticker.color ||
-                               rendered.sample({20.0f + side * .7f, 20.0f + side * .3f}) != sticker.color)) ||
+            if ((style >= 3 &&
+                 (rendered.sample(center) != sticker.color ||
+                  rendered.sample({20.0f + side * .3f, 20.0f + side * .3f}) != sticker.color ||
+                  rendered.sample({20.0f + side * .7f, 20.0f + side * .3f}) != sticker.color)) ||
                 (style < 3 && rendered.sample(center) == sticker.color) ||
                 (style % 3 == 2 && rendered.sample({20, center.y}) != rgb(255, 255, 255)) ||
                 (style % 3 != 2 && rendered.sample({20, center.y}) == rgb(255, 255, 255)) ||
                 decode(png(rendered)).pixels != rendered.pixels)
-                throw std::runtime_error("Check/X artwork, badge, size, color, or PNG round trip failed: style " +
-                                         std::to_string(style) + ", size " + std::to_string(side));
+                throw std::runtime_error(
+                    "Check/X artwork, badge, size, color, or PNG round trip failed: style " +
+                    std::to_string(style) + ", size " + std::to_string(side));
             sticker.a = {20.0f + style * 120, side == 80 ? 40.0f : 170.0f};
             sticker.b = sticker.a + Point{float(side), float(side)};
             stickers.push_back(sticker);
@@ -1055,7 +918,8 @@ void Graphics::test()
     measureText(text);
     const auto annotationLayout = textLayout(text);
     UINT32 familyLength = 0;
-    check(annotationLayout->GetFontFamilyNameLength(0, &familyLength), "Cannot inspect annotation font name.");
+    check(annotationLayout->GetFontFamilyNameLength(0, &familyLength),
+          "Cannot inspect annotation font name.");
     std::wstring family(familyLength + 1, L'\0');
     check(annotationLayout->GetFontFamilyName(0, family.data(), static_cast<UINT32>(family.size())),
           "Cannot inspect annotation typeface.");
@@ -1080,10 +944,12 @@ void Graphics::test()
     const auto boxed = flatten(textSource, {text});
     if (text.bounds().height() <= plainBounds.height() + 24 ||
         boxed.sample({text.a.x + 15, text.b.y - 5}) != rgb(255, 255, 255) ||
-        boxed.sample({0, 0}) != textSource.sample({0, 0}) || decode(png(boxed)).pixels != boxed.pixels)
+        boxed.sample({0, 0}) != textSource.sample({0, 0}) ||
+        decode(png(boxed)).pixels != boxed.pixels)
         throw std::runtime_error("Multiline/boxed text or text PNG round trip failed.");
     text.color = rgb(255, 255, 255);
-    if (flatten(textSource, {text}).sample({text.a.x + 15, text.b.y - 5}) != textBackground(text.color))
+    if (flatten(textSource, {text}).sample({text.a.x + 15, text.b.y - 5}) !=
+        textBackground(text.color))
         throw std::runtime_error("White boxed text lost its contrasting background.");
     text.color = rgb(25, 50, 75);
     rectangle.a = {420, 160};
@@ -1212,7 +1078,8 @@ void Graphics::test()
             {
                 const size_t i = (static_cast<size_t>(y) * borderPreview.width + x) * 4;
                 const uint8_t background = x < borderPreview.width / 2 ? 255 : 0;
-                borderPreview.pixels[i] = borderPreview.pixels[i + 1] = borderPreview.pixels[i + 2] = background;
+                borderPreview.pixels[i] = borderPreview.pixels[i + 1] =
+                    borderPreview.pixels[i + 2] = background;
                 borderPreview.pixels[i + 3] = 255;
             }
         std::vector<Annotation> labels;
@@ -1226,11 +1093,13 @@ void Graphics::test()
                     for (int x = 0; x < sample.width; ++x)
                     {
                         const size_t src = (static_cast<size_t>(y) * sample.width + x) * 4;
-                        const size_t dst = (static_cast<size_t>(y + dy) * borderPreview.width + x + dx) * 4;
+                        const size_t dst =
+                            (static_cast<size_t>(y + dy) * borderPreview.width + x + dx) * 4;
                         const double opacity = sample.pixels[src + 3] / 255.0;
                         for (int c = 0; c < 3; ++c)
-                            borderPreview.pixels[dst + c] = static_cast<uint8_t>(std::lround(
-                                sample.pixels[src + c] * opacity + borderPreview.pixels[dst + c] * (1 - opacity)));
+                            borderPreview.pixels[dst + c] = static_cast<uint8_t>(
+                                std::lround(sample.pixels[src + c] * opacity +
+                                            borderPreview.pixels[dst + c] * (1 - opacity)));
                     }
                 Annotation label;
                 label.kind = Tool::Text;
@@ -1260,14 +1129,16 @@ void Graphics::test()
     const auto &logo = samtecLogo();
     auto logoPixel = [&](double x, double y) {
         return &logo.pixels[(static_cast<size_t>(y * (logo.height - 1)) * logo.width +
-                            static_cast<int>(x * (logo.width - 1))) * 4];
+                             static_cast<int>(x * (logo.width - 1))) *
+                            4];
     };
     const auto bar = logoPixel(.5, .07), orange = logoPixel(.5, .52);
     if (logo.height < logo.width * 1.4 || logo.height > logo.width * 1.8 ||
-        logoPixel(.75, .385)[3] > 5 || logoPixel(.25, .59)[3] > 5 ||
-        bar[3] < 240 || bar[0] > 10 || bar[1] > 10 || bar[2] > 10 ||
-        orange[3] < 240 || orange[2] < 220 || orange[1] < 60 || orange[1] > 150 || orange[0] > 65)
-        throw std::runtime_error("Samtec logo lost its transparent cutouts, black bars, orange fill, or proportions.");
+        logoPixel(.75, .385)[3] > 5 || logoPixel(.25, .59)[3] > 5 || bar[3] < 240 || bar[0] > 10 ||
+        bar[1] > 10 || bar[2] > 10 || orange[3] < 240 || orange[2] < 220 || orange[1] < 60 ||
+        orange[1] > 150 || orange[0] > 65)
+        throw std::runtime_error(
+            "Samtec logo lost its transparent cutouts, black bars, orange fill, or proportions.");
     saveBytes(L"samtec-logo-transparent.png", png(logo));
     size_t previousChanged = 0;
     for (int side : {40, 160, 640})
@@ -1286,12 +1157,15 @@ void Graphics::test()
                     ++changed;
                     if (x < side * .80 || y < side * .80 || x == side - 1 || y == side - 1 ||
                         branded.pixels[i + 3] != 255 || branded.pixels[i + 2] < 8)
-                        throw std::runtime_error("Samtec watermark was misplaced, opaque, or changed image alpha.");
+                        throw std::runtime_error(
+                            "Samtec watermark was misplaced, opaque, or changed image alpha.");
                 }
             }
         if (branded.width != side || branded.height != side || changed <= previousChanged ||
-            disabledLogo.pixels != screenshot.pixels || decode(png(branded)).pixels != branded.pixels)
-            throw std::runtime_error("Samtec watermark default, scaling, dimensions, or PNG round trip failed.");
+            disabledLogo.pixels != screenshot.pixels ||
+            decode(png(branded)).pixels != branded.pixels)
+            throw std::runtime_error(
+                "Samtec watermark default, scaling, dimensions, or PNG round trip failed.");
         previousChanged = changed;
     }
     auto transparentSource = Bitmap::create(640, 320);
@@ -1302,8 +1176,10 @@ void Graphics::test()
     const auto borderedLight = exportImage(textSource, borderItems, {true, true});
     const auto brandedDark = exportImage(darkSource, darkItems, {false, true});
     const auto borderedDark = exportImage(darkSource, darkItems, {true, true});
-    if (brandedDark.pixels == darkPlain.pixels || decode(png(borderedDark)).pixels != borderedDark.pixels)
-        throw std::runtime_error("Samtec Logo did not work on dark screenshots with Professional Border.");
+    if (brandedDark.pixels == darkPlain.pixels ||
+        decode(png(borderedDark)).pixels != borderedDark.pixels)
+        throw std::runtime_error(
+            "Samtec Logo did not work on dark screenshots with Professional Border.");
     makeBorderPreview(brandedLight, borderedLight, L"samtec-logo-light-preview.png");
     makeBorderPreview(brandedDark, borderedDark, L"samtec-logo-dark-preview.png");
     saveBytes(L"samtec-logo-snippet.png", png(borderedLight));
@@ -1322,15 +1198,19 @@ void Graphics::test()
         size_t transparent = 0;
         for (size_t i = 3; i < asset.pixels.size(); i += 4)
             transparent += asset.pixels[i] <= 5;
-        if (transparent < static_cast<size_t>(asset.width * asset.height) / 10 || asset.width <= asset.height)
-            throw std::runtime_error("Tiger or wordmark lost its transparent cutouts or proportions.");
-        saveBytes(mark == 1 ? L"samtec-tiger-transparent.png" : L"samtec-wordmark-transparent.png", png(asset));
+        if (transparent < static_cast<size_t>(asset.width * asset.height) / 10 ||
+            asset.width <= asset.height)
+            throw std::runtime_error(
+                "Tiger or wordmark lost its transparent cutouts or proportions.");
+        saveBytes(mark == 1 ? L"samtec-tiger-transparent.png" : L"samtec-wordmark-transparent.png",
+                  png(asset));
     }
     auto stylesPreview = Bitmap::create(1680, 1920);
     std::fill(stylesPreview.pixels.begin(), stylesPreview.pixels.end(), 255);
     std::vector<Annotation> previewLabels;
-    const wchar_t *names[] = {L"S - White badge", L"S - Soft watermark", L"Tiger - White badge",
-        L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
+    const wchar_t *names[] = {L"S - White badge",        L"S - Soft watermark",
+                              L"Tiger - White badge",    L"Tiger - Soft watermark",
+                              L"Wordmark - White badge", L"Wordmark - Soft watermark"};
     for (uint8_t style = 0; style < 6; ++style)
     {
         const auto badge = samtecBadge(style);
@@ -1345,17 +1225,21 @@ void Graphics::test()
                 const int alpha = badge.pixels[i + 3];
                 visible += alpha >= 40;
                 transparent += alpha == 0;
-                if (alpha > 83 || (alpha && (badge.pixels[i] != badge.pixels[i + 1] ||
-                                           badge.pixels[i] != badge.pixels[i + 2])) ||
+                if (alpha > 83 ||
+                    (alpha && (badge.pixels[i] != badge.pixels[i + 1] ||
+                               badge.pixels[i] != badge.pixels[i + 2])) ||
                     light.pixels[i + 3] != alpha)
-                    throw std::runtime_error("Soft watermark must be faint, neutral, and free of orange accents.");
+                    throw std::runtime_error(
+                        "Soft watermark must be faint, neutral, and free of orange accents.");
             }
             if (visible < 30 || transparent < badge.pixels.size() / 64 ||
                 badge.width >= samtecBadge(style - 1).width ||
                 badge.height >= samtecBadge(style - 1).height)
-                throw std::runtime_error("Soft watermark lacks visible artwork, transparent cutouts, or a compact size: " +
-                                         std::to_string(style) + ", visible " + std::to_string(visible) +
-                                         ", transparent " + std::to_string(transparent));
+                throw std::runtime_error("Soft watermark lacks visible artwork, transparent "
+                                         "cutouts, or a compact size: " +
+                                         std::to_string(style) + ", visible " +
+                                         std::to_string(visible) + ", transparent " +
+                                         std::to_string(transparent));
         }
         saveBytes(L"samtec-style-" + std::to_wstring(style + 1) + L".png", png(badge));
         for (int background = 0; background < 3; ++background)
@@ -1363,7 +1247,8 @@ void Graphics::test()
             auto source = Bitmap::create(520, 240);
             for (size_t i = 0; i < source.pixels.size(); i += 4)
             {
-                source.pixels[i] = source.pixels[i + 1] = source.pixels[i + 2] = background == 1 ? 24 : 255;
+                source.pixels[i] = source.pixels[i + 1] = source.pixels[i + 2] =
+                    background == 1 ? 24 : 255;
                 source.pixels[i + 3] = 255;
             }
             std::vector<Annotation> text;
@@ -1383,7 +1268,8 @@ void Graphics::test()
                     line.a = {16, 60.0f + row * 23};
                     line.bold = false;
                     line.fontSize = 14;
-                    line.text = L"Review the attached figures and confirm these details for approval.";
+                    line.text =
+                        L"Review the attached figures and confirm these details for approval.";
                     measureText(line);
                     text.push_back(line);
                 }
@@ -1391,10 +1277,12 @@ void Graphics::test()
             const auto rendered = exportImage(source, text, {false, true, style});
             const auto bordered = exportImage(source, text, {true, true, style});
             if (rendered.width != source.width || rendered.height != source.height ||
-                rendered.pixels == plain.pixels || decode(png(rendered)).pixels != rendered.pixels ||
+                rendered.pixels == plain.pixels ||
+                decode(png(rendered)).pixels != rendered.pixels ||
                 decode(png(bordered)).pixels != bordered.pixels ||
                 exportImage(source, text, {false, false, style}).pixels != plain.pixels)
-                throw std::runtime_error("A Samtec style failed export, border, disabled, or PNG consistency.");
+                throw std::runtime_error(
+                    "A Samtec style failed export, border, disabled, or PNG consistency.");
             if (style % 2 && background < 2)
             {
                 int greatestContrast = 0;
@@ -1403,30 +1291,38 @@ void Graphics::test()
                     const int change = int(rendered.pixels[i]) - int(plain.pixels[i]);
                     greatestContrast = std::max(greatestContrast, std::abs(change));
                     if ((background == 0 && change < -80) || (background == 1 && change > 80))
-                        throw std::runtime_error("Soft watermark is too prominent on a plain background.");
+                        throw std::runtime_error(
+                            "Soft watermark is too prominent on a plain background.");
                 }
                 if (greatestContrast < 25)
-                    throw std::runtime_error("Soft watermark is unreadable on a light or dark background.");
+                    throw std::runtime_error(
+                        "Soft watermark is unreadable on a light or dark background.");
             }
             for (int y = 0; y < source.height; ++y)
                 for (int x = 0; x < source.width; ++x)
                 {
                     const size_t i = (static_cast<size_t>(y) * source.width + x) * 4;
                     if (std::memcmp(plain.pixels.data() + i, rendered.pixels.data() + i, 4) &&
-                        (x < source.width * .65 || y < source.height * .78 || rendered.pixels[i + 3] != 255))
-                        throw std::runtime_error("Samtec badge changed pixels outside its bottom-right area.");
+                        (x < source.width * .65 || y < source.height * .78 ||
+                         rendered.pixels[i + 3] != 255))
+                        throw std::runtime_error(
+                            "Samtec badge changed pixels outside its bottom-right area.");
                 }
             const int left = background * 560 + 20, top = style * 320 + 60;
             for (int y = 0; y < bordered.height; ++y)
                 for (int x = 0; x < bordered.width; ++x)
                 {
                     const size_t i = (static_cast<size_t>(y) * bordered.width + x) * 4;
-                    compositePixel(stylesPreview, left + x, top + y,
-                        rgb(bordered.pixels[i + 2], bordered.pixels[i + 1], bordered.pixels[i]), bordered.pixels[i + 3] / 255.0);
+                    compositePixel(
+                        stylesPreview, left + x, top + y,
+                        rgb(bordered.pixels[i + 2], bordered.pixels[i + 1], bordered.pixels[i]),
+                        bordered.pixels[i + 3] / 255.0);
                 }
             Annotation label = heading;
             label.a = {float(left), float(top - 42)};
-            label.text = std::wstring(names[style]) + (background == 0 ? L" / White" : background == 1 ? L" / Dark" : L" / Text");
+            label.text = std::wstring(names[style]) + (background == 0   ? L" / White"
+                                                       : background == 1 ? L" / Dark"
+                                                                         : L" / Text");
             label.color = rgb(35, 39, 56);
             label.fontSize = 17;
             measureText(label);
@@ -1508,15 +1404,16 @@ void Graphics::test()
         rendered.pixels[shinePixel] > 200)
         throw std::runtime_error("Straight gloss arrow lost its highlight.");
     const Annotation &gloss = samples[samples.size() - 2];
-    if (length(gloss.arrowSpine(.5f) - Point{1125, 100}) > .001f ||
-        gloss.hit({1125, 140}, 0) || !gloss.hit({1125, 100}, 0))
+    if (length(gloss.arrowSpine(.5f) - Point{1125, 100}) > .001f || gloss.hit({1125, 140}, 0) ||
+        !gloss.hit({1125, 100}, 0))
         throw std::runtime_error("Straight gloss arrow geometry or selection failed.");
     int glossBorder = 0, glossFill = 0;
     for (int y = 60; y < 145; ++y)
         for (int x = 1000; x < 1250; ++x)
         {
             const size_t i = (static_cast<size_t>(y) * rendered.width + x) * 4;
-            if (rendered.pixels[i] < 40 && rendered.pixels[i + 1] < 40 && rendered.pixels[i + 2] < 40)
+            if (rendered.pixels[i] < 40 && rendered.pixels[i + 1] < 40 &&
+                rendered.pixels[i + 2] < 40)
                 ++glossBorder;
             if (rendered.pixels[i + 2] > 180 && rendered.pixels[i] < 100)
                 ++glossFill;
@@ -1532,9 +1429,8 @@ void Graphics::test()
         throw std::runtime_error("Block gloss arrow shaft, flat tail, or hit testing failed.");
     const size_t blockHighlight = (static_cast<size_t>(100) * rendered.width + 1445) * 4;
     const auto tailBorder = rendered.sample({1340, 92});
-    if (!tailBorder || (*tailBorder & 255) > 40 ||
-        rendered.pixels[blockHighlight + 2] < 200 || rendered.pixels[blockHighlight] < 80 ||
-        rendered.pixels[blockHighlight] > 200)
+    if (!tailBorder || (*tailBorder & 255) > 40 || rendered.pixels[blockHighlight + 2] < 200 ||
+        rendered.pixels[blockHighlight] < 80 || rendered.pixels[blockHighlight] > 200)
         throw std::runtime_error("Block gloss arrow lost its square outline or highlight.");
     Annotation rotated = block;
     rotated.a = {80, 80};

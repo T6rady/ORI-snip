@@ -1,7 +1,7 @@
 .tools/
 build/
 build-*/
-dist/JackSnip.ini
+dist/TigerSnip.ini
 llvm-release.json
 test-output/
 self-test-results.txt

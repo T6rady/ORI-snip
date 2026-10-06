@@ -1,11 +1,20 @@
-SNIPPER 1.0.1
+TIGER SNIP 1.0.2
 
-Double-click Snipper.exe. No installation required.
+For installation from the shared drive, double-click Tiger Snip Setup.msi once.
+Then open Tiger Snip from the Windows Start menu. No administrator elevation is
+required by this installer; your organization's installation policies still apply.
+The app is installed locally under %LOCALAPPDATA%\Programs\Tiger Snip.
+Personal settings are stored in %LOCALAPPDATA%\Tiger Snip\TigerSnip.ini.
+Each Windows user has their own settings. The installer includes no personal settings.
+The standalone Tiger Snip.exe also runs directly and uses those same personal settings.
+Windows Installed apps can uninstall Tiger Snip; settings remain for reinstalling.
+To reset everything after uninstalling, delete %LOCALAPPDATA%\Tiger Snip.
 The welcome screen picks one of ten workplace-friendly headlines each time it opens,
 including "The snipping tool of your dreams!" It avoids repeating the last one.
 
 Click New snip, drag an area, and release. Pen is selected automatically.
-Ctrl+C copies the image with all annotations. Capturing never automatically copies.
+New captures copy automatically by default. Settings > Auto copy new snips turns this off.
+Ctrl+C copies the current image with all annotations, including edits made after capture.
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 Ctrl+Alt+F instantly captures all monitors and the mouse pointer, preserving hover menus.
 Click Crop beside the full-screen button (or press C), drag the part to keep, and release.
@@ -67,7 +76,7 @@ F11 or the full-screen button beside Undo/Redo opens a full-screen screenshot vi
 F11, Esc, or Exit full screen returns to the previous window and toolbar layout.
 Full screen retains Fit and 100% in a slim bottom strip.
 Each tool remembers its own last color and style, including after File > Exit.
-Pen size (1-40 px, shared with shape strokes) is also remembered after restarting.
+Pen size (1-100 px, shared with shape strokes) is also remembered after restarting.
 Highlight width and text size are saved separately.
 Text also remembers font size, bold, and the rounded Box setting.
 Preferences save on close/exit only. New captures still start with Pen.
@@ -81,12 +90,12 @@ Pause works by itself: focus a shortcut field, press Pause/Break, then Save.
 Other shortcuts need Ctrl or Alt; F12 is reserved.
 File and the tray menu also offer Capture all monitors now.
 
-Settings > Rendering... lets you switch how Snipper draws its window.
+Settings > Rendering... lets you switch how Tiger Snip draws its window.
 Check Use software rendering (compatibility mode) if resizing or maximizing
 freezes the window, leaves stale content, or takes seconds to redraw.
 Leave it unchecked for hardware acceleration, the default for most PCs.
 Software rendering may use more CPU on large displays. Click Apply to switch
-immediately and save the choice in JackSnip.ini beside the executable.
+immediately and save the choice in your personal TigerSnip.ini settings file.
 No restart is needed. Copied and saved image quality is unchanged.
 
 Settings > Save location... lets you choose the default folder for saved snips.
@@ -112,12 +121,26 @@ All logos are smaller, with the watermarks more compact than the white badges.
 The bottom-right logo scales with the snip and works with or without Professional Border.
 Enabled and selected style are remembered on close/exit; the preview shows/hides the logo immediately.
 
-Closing the window leaves a small tray process and releases the screenshot.
+Recent keeps the last 10 captures, including the current one, in this PC's memory.
+Click Recent or press Ctrl+Shift+R to reopen a capture with its editable annotations.
+Closing the window leaves Tiger Snip in the tray and retains those captures.
 Closing, exiting, and taking a new snip happen immediately without a save prompt.
-Click the tray icon to snip. File > Exit quits entirely.
+Click the tray icon to snip. File > Exit quits entirely and clears the capture collection.
+Captures are not saved as projects or restored after restarting.
 Settings > Run at sign-in is optional and disabled by default.
 
-Keep the app in a writable folder; JackSnip.ini is created beside it when
-you save shortcut settings. Keep the accompanying runtime notices if sharing.
+Settings save in your Windows user profile; the shared release folder can be read-only.
+Keep the accompanying runtime notices if sharing the standalone EXE.
+If Run at sign-in is enabled, disable it before uninstalling the app.
 
 The preview shows the same logo, blur, rounded corners, and padding as Copy and PNG Save.
+
+DATA HANDLING
+Tiger Snip has no application networking or telemetry. Recent captures, original crop
+pixels, and undo history stay in local process memory until Exit or oldest eviction.
+Copy places an image on the Windows clipboard, where it can remain after Tiger Snip exits.
+Windows clipboard history/synchronization and other apps are controlled separately.
+Save writes a PNG wherever you choose, including a network or synchronized folder.
+An interrupted save can leave an adjacent temporary or recovery image file.
+Eraser removes annotations; it does not erase the underlying screenshot. Highlight
+is translucent. Cropping is reversible in Recent/undo while the app is running.

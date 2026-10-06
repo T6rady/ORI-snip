@@ -1,6 +1,6 @@
-param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'Snipper.exe')
+param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'Tiger Snip.exe')
 $ErrorActionPreference = 'Stop'
-if ($OutputName -notmatch '^[A-Za-z0-9._-]+\.exe$') { throw 'OutputName must be an executable filename.' }
+if ($OutputName -notmatch '^[A-Za-z0-9][A-Za-z0-9._ -]*\.exe$') { throw 'OutputName must be an executable filename.' }
 $taskRoot = $PSScriptRoot
 if (-not $CompilerDirectory) {
     $taskPortable = Get-ChildItem -LiteralPath (Join-Path $taskRoot '.tools') -Directory -ErrorAction SilentlyContinue |
@@ -12,10 +12,12 @@ if (-not $CompilerDirectory -or -not (Test-Path -LiteralPath (Join-Path $Compile
 }
 $taskCompiler = Join-Path $CompilerDirectory 'clang++.exe'
 $taskResourceCompiler = Join-Path $CompilerDirectory 'llvm-windres.exe'
+$taskSources = @('model', 'graphics', 'windows_support', 'settings', 'color_picker', 'capture', 'clipboard', 'file_io', 'test_reports') |
+    ForEach-Object { Join-Path $taskRoot "src\$_.cpp" }
 $taskBuild = Join-Path $taskRoot 'build'
 $taskDist = Join-Path $taskRoot 'dist'
 New-Item -ItemType Directory -Force -Path $taskBuild, $taskDist | Out-Null
-$taskIcon = Join-Path $taskRoot 'resources\snipper.ico'
+$taskIcon = Join-Path $taskRoot 'resources\tiger-snip.ico'
 if (-not (Test-Path -LiteralPath $taskIcon)) { & (Join-Path $taskRoot 'scripts\make-icon.ps1') }
 Push-Location (Join-Path $taskRoot 'resources')
 try {
@@ -23,17 +25,17 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Resource compilation failed.' }
 } finally { Pop-Location }
 $taskArguments = @('-std=c++20','-Os','-Wall','-Wextra','-Wpedantic','-DUNICODE','-D_UNICODE','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-D_WIN32_WINNT=0x0A00',
-    (Join-Path $taskRoot 'src\main.cpp'),(Join-Path $taskRoot 'src\model.cpp'),(Join-Path $taskRoot 'src\graphics.cpp'),(Join-Path $taskBuild 'app.res.o'),
+    (Join-Path $taskRoot 'src\main.cpp')) + $taskSources + @((Join-Path $taskBuild 'app.res.o'),
     '-o',(Join-Path $taskDist $OutputName),'-municode','-mwindows','-static','-Wl,--nxcompat','-Wl,--dynamicbase','-Wl,--high-entropy-va','-s',
-    '-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32','-lcomdlg32','-lcomctl32','-lshell32','-ladvapi32','-ldwmapi')
+    '-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32','-lcomdlg32','-lcomctl32','-lshell32','-ladvapi32','-ldwmapi','-luuid')
 & $taskCompiler @taskArguments
 if ($LASTEXITCODE -ne 0) { throw 'C++ compilation failed.' }
 Get-Item -LiteralPath (Join-Path $taskDist $OutputName) | Select-Object FullName, Length, LastWriteTime
 Copy-Item -LiteralPath (Join-Path $taskRoot 'resources\licenses\LLVM.txt'), (Join-Path $taskRoot 'resources\licenses\MinGW-runtime.txt') -Destination $taskDist
 if ($Test) {
     $taskClipboardArguments = @('-std=c++20','-Os','-Wall','-Wextra','-Wpedantic','-DUNICODE','-D_UNICODE','-DWIN32_LEAN_AND_MEAN','-DNOMINMAX','-D_WIN32_WINNT=0x0A00',
-        '-I',(Join-Path $taskRoot 'src'),(Join-Path $taskRoot 'tests\clipboard.cpp'),(Join-Path $taskRoot 'src\model.cpp'),(Join-Path $taskRoot 'src\graphics.cpp'),(Join-Path $taskBuild 'app.res.o'),
-        '-o',(Join-Path $taskBuild 'clipboard_test.exe'),'-municode','-static','-s','-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32')
+        '-I',(Join-Path $taskRoot 'src'),(Join-Path $taskRoot 'tests\clipboard.cpp')) + $taskSources + @((Join-Path $taskBuild 'app.res.o'),
+        '-o',(Join-Path $taskBuild 'clipboard_test.exe'),'-municode','-static','-s','-ld2d1','-ldwrite','-lwindowscodecs','-lole32','-luser32','-lgdi32','-ladvapi32','-lcomctl32','-lshell32','-luuid')
     & $taskCompiler @taskClipboardArguments
     if ($LASTEXITCODE -ne 0) { throw 'Clipboard test compilation failed.' }
     $taskAutoCopyArguments = @($taskArguments)
@@ -42,14 +44,40 @@ if ($Test) {
     $taskAutoCopyArguments = @($taskAutoCopyArguments | Where-Object { $_ -ne '-mwindows' })
     & $taskCompiler @taskAutoCopyArguments
     if ($LASTEXITCODE -ne 0) { throw 'Auto copy test compilation failed.' }
-    Push-Location $taskBuild
+    $taskFileSaveArguments = @($taskClipboardArguments)
+    $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskRoot 'tests\clipboard.cpp'))] = Join-Path $taskRoot 'tests\file_save.cpp'
+    $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskBuild 'clipboard_test.exe'))] = Join-Path $taskBuild 'file_save_test.exe'
+    & $taskCompiler @taskFileSaveArguments
+    if ($LASTEXITCODE -ne 0) { throw 'File save test compilation failed.' }
+    $taskSettingsArguments = @($taskAutoCopyArguments)
+    $taskSettingsArguments[$taskSettingsArguments.IndexOf((Join-Path $taskRoot 'tests\autocopy.cpp'))] = Join-Path $taskRoot 'tests\settings.cpp'
+    $taskSettingsArguments[$taskSettingsArguments.IndexOf((Join-Path $taskBuild 'autocopy_test.exe'))] = Join-Path $taskBuild 'settings_test.exe'
+    & $taskCompiler @taskSettingsArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Settings test compilation failed.' }
+    $taskRobustnessArguments = @($taskSettingsArguments) + '-DTIGER_SNIP_TESTING'
+    $taskRobustnessArguments[$taskRobustnessArguments.IndexOf((Join-Path $taskRoot 'tests\settings.cpp'))] = Join-Path $taskRoot 'tests\robustness.cpp'
+    $taskRobustnessArguments[$taskRobustnessArguments.IndexOf((Join-Path $taskBuild 'settings_test.exe'))] = Join-Path $taskBuild 'robustness_test.exe'
+    & $taskCompiler @taskRobustnessArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Robustness test compilation failed.' }
+    $taskRunRoot = Join-Path $taskBuild ('test-output\' + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Path $taskRunRoot | Out-Null
+    Push-Location $taskRunRoot
     try {
         $taskProcess = Start-Process -FilePath (Join-Path $taskDist $OutputName) -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
-        Get-Content -LiteralPath 'self-test-results.txt'
         if ($taskProcess.ExitCode -ne 0) { throw 'Native self-test failed.' }
+        $taskReports = @(Get-ChildItem -LiteralPath 'test-output' -Filter 'self-test-results.txt' -Recurse)
+        if ($taskReports.Count -ne 1) { throw 'This invocation did not produce exactly one native test report.' }
+        Get-Content -LiteralPath $taskReports[0].FullName
         & (Join-Path $taskBuild 'clipboard_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Isolated clipboard test failed.' }
         & (Join-Path $taskBuild 'autocopy_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Isolated auto copy test failed.' }
+        & (Join-Path $taskBuild 'file_save_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'File save test failed.' }
+        & (Join-Path $taskBuild 'settings_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Settings test failed.' }
+        & (Join-Path $taskBuild 'robustness_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Robustness test failed.' }
+        Write-Host "Test files: $taskRunRoot"
     } finally { Pop-Location }
 }

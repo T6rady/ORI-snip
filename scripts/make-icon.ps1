@@ -25,7 +25,7 @@ foreach ($taskSize in @(16, 24, 32, 48, 64, 128, 256)) {
     $taskGraphics.Dispose(); $taskBitmap.Dispose(); $taskStream.Dispose()
 }
 $taskSourceImage.Dispose()
-$taskOutput = Join-Path $PSScriptRoot '..\resources\snipper.ico'
+$taskOutput = Join-Path $PSScriptRoot '..\resources\tiger-snip.ico'
 $taskFile = [System.IO.File]::Create($taskOutput)
 $taskWriter = [System.IO.BinaryWriter]::new($taskFile)
 $taskWriter.Write([uint16]0); $taskWriter.Write([uint16]1); $taskWriter.Write([uint16]$taskFrames.Count)

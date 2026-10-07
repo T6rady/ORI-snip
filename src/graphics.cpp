@@ -119,9 +119,23 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
     Com<ID2D1SolidColorBrush> brush;
     check(rt->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), brush.put()),
           "Cannot create drawing brush.");
+    Com<ID2D1Layer> opacityLayer;
     for (size_t index = 0; index < items.size(); ++index)
     {
         const auto &item = items[index];
+        const float opacity = std::clamp(item.opacity, 0.0f, 1.0f);
+        if (opacity < 1)
+        {
+            if (!opacityLayer)
+                check(rt->CreateLayer(opacityLayer.put()),
+                      "Cannot create annotation opacity layer.");
+            // Composite the entire annotation once so crossings, arrow outlines and boxed
+            // text keep their appearance as opacity changes. Existing highlight alpha remains.
+            rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr,
+                                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                D2D1::Matrix3x2F::Identity(), opacity),
+                          opacityLayer.get());
+        }
         brush->SetColor(color(item.color));
         float width = item.thickness;
         auto r = item.bounds();
@@ -310,6 +324,8 @@ void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotati
         default:
             break;
         }
+        if (opacity < 1)
+            rt->PopLayer();
     }
 }
 static Com<IWICImagingFactory> wicFactory()

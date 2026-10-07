@@ -14,29 +14,33 @@ int wmain()
     bool com = false;
     int result = 0;
     auto require = [](bool ok, const char *message) {
-        if (!ok) throw std::runtime_error(message);
+        if (!ok)
+            throw std::runtime_error(message);
     };
     try
     {
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         require(station && SetProcessWindowStation(station), "Cannot isolate test clipboard.");
         desktop = CreateDesktopW(L"TigerSnipAutoCopyTest", nullptr, nullptr, 0,
-            DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS, nullptr);
+                                 DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS |
+                                     DESKTOP_WRITEOBJECTS,
+                                 nullptr);
         require(desktop && SetThreadDesktop(desktop), "Cannot attach private test desktop.");
         check(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED), "Cannot initialize COM.");
         com = true;
         app.instance = GetModuleHandleW(nullptr);
         app.iniPath = (std::filesystem::current_path() / L"auto-copy-settings.ini").wstring();
         require(WritePrivateProfileStringW(L"Settings", L"AutoCopy", nullptr, app.iniPath.c_str()),
-            "Cannot reset isolated settings.");
+                "Cannot reset isolated settings.");
         loadToolPreferences();
         require(app.autoCopy, "Auto copy must default on when no preference exists.");
         app.softwareRendering = true;
         INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_WIN95_CLASSES};
         InitCommonControlsEx(&controls);
         registerClasses();
-        require(CreateWindowExW(0, MainClass, L"Auto copy test", WS_OVERLAPPEDWINDOW,
-            0, 0, 1000, 700, nullptr, createMenu(), app.instance, nullptr), "Cannot create editor.");
+        require(CreateWindowExW(0, MainClass, L"Auto copy test", WS_OVERLAPPEDWINDOW, 0, 0, 1000,
+                                700, nullptr, createMenu(), app.instance, nullptr),
+                "Cannot create editor.");
         auto checked = [&] {
             require(GetMenu(app.window) != nullptr, "Private editor is missing its Settings menu.");
             updateMenus();
@@ -60,8 +64,9 @@ int wmain()
             {
                 const auto header = reinterpret_cast<const BITMAPINFOHEADER *>(data);
                 match = header->biWidth == expected.width && header->biHeight == -expected.height &&
-                    GlobalSize(memory) >= sizeof(*header) + expected.pixels.size() &&
-                    std::memcmp(data + sizeof(*header), expected.pixels.data(), expected.pixels.size()) == 0;
+                        GlobalSize(memory) >= sizeof(*header) + expected.pixels.size() &&
+                        std::memcmp(data + sizeof(*header), expected.pixels.data(),
+                                    expected.pixels.size()) == 0;
                 GlobalUnlock(memory);
             }
             const auto png = GetClipboardData(RegisterClipboardFormatW(L"PNG"));
@@ -70,10 +75,11 @@ int wmain()
             {
                 const auto bytes = app.graphics.png(expected);
                 match = match && GlobalSize(png) >= bytes.size() &&
-                    std::memcmp(pngData, bytes.data(), bytes.size()) == 0;
+                        std::memcmp(pngData, bytes.data(), bytes.size()) == 0;
                 GlobalUnlock(png);
             }
-            else match = false;
+            else
+                match = false;
             CloseClipboard();
             require(match, "Clipboard pixels/PNG do not match the current export.");
         };
@@ -85,25 +91,55 @@ int wmain()
         BYTE ctrlKeyboard[256];
         std::copy(std::begin(keyboard), std::end(keyboard), std::begin(ctrlKeyboard));
         ctrlKeyboard[VK_CONTROL] = 0x80;
+        // Plain letters, including a late/repeated C after Ctrl is released, must not
+        // change the editor mode or start crop/eyedropper while copying an image.
+        auto plainLetters = [&] {
+            const auto tool = app.tool;
+            const auto items = app.document.items;
+            const auto selection = app.document.selected;
+            const auto clipboardSequence = GetClipboardSequenceNumber();
+            BYTE plainKeyboard[256]{};
+            for (bool shift : {false, true})
+            {
+                plainKeyboard[VK_SHIFT] = shift ? 0x80 : 0;
+                require(SetKeyboardState(plainKeyboard), "Cannot set plain keyboard state.");
+                for (WPARAM key = 'A'; key <= 'Z'; ++key)
+                {
+                    SendMessageW(app.window, WM_KEYDOWN, key, 0);
+                    require(app.tool == tool && !app.cropping && !app.erasing &&
+                                !app.pickingColor && !app.textEdit &&
+                                app.document.selected == selection && app.document.items == items,
+                            "A plain letter changed tools or editor state.");
+                }
+            }
+            require(SetKeyboardState(keyboard), "Cannot restore keyboard state.");
+            require(GetClipboardSequenceNumber() == clipboardSequence,
+                    "Plain letters changed the clipboard.");
+        };
+        plainLetters();
         auto ctrlC = [&] {
             require(SetKeyboardState(ctrlKeyboard), "Cannot set private keyboard state.");
             require(GetKeyState(VK_CONTROL) & 0x8000, "Private desktop did not retain Ctrl state.");
             const auto before = GetClipboardSequenceNumber();
             SendMessageW(app.window, WM_KEYDOWN, 'C', 0);
             SetKeyboardState(keyboard);
-            require(GetClipboardSequenceNumber() != before, "Ctrl+C must copy again even after auto copy.");
-            require(app.status.find(L"Copied image and annotations") == 0, "Ctrl+C must confirm Copy success.");
+            require(GetClipboardSequenceNumber() != before,
+                    "Ctrl+C must copy again even after auto copy.");
+            require(app.status.find(L"Copied image and annotations") == 0,
+                    "Ctrl+C must confirm Copy success.");
             // Windows suppresses visibility on noninteractive stations. The desktop
             // smoke suite verifies the visible flash; this suite verifies actual copying.
             require(!IsWindowVisible(app.window) || app.copyFlashStarted,
-                "Visible manual Copy must start feedback.");
+                    "Visible manual Copy must start feedback.");
             clipboardMatches(renderedExport());
+            plainLetters();
         };
         ctrlC();
         ctrlC();
         Annotation arrow;
         arrow.kind = Tool::Arrow;
-        arrow.a = {10, 10}; arrow.b = {70, 40};
+        arrow.a = {10, 10};
+        arrow.b = {70, 40};
         app.document.items.push_back(arrow);
         app.dirty = true;
         ctrlC();
@@ -115,7 +151,8 @@ int wmain()
         require(!app.autoCopy, "Disabled auto copy must persist on reload.");
         const auto beforeCapture = GetClipboardSequenceNumber();
         acceptCapture(image.crop(0, 0, 30, 20));
-        require(GetClipboardSequenceNumber() == beforeCapture, "Disabled auto copy changed clipboard.");
+        require(GetClipboardSequenceNumber() == beforeCapture,
+                "Disabled auto copy changed clipboard.");
         clipboardMatches(copiedEdits);
         ctrlC();
         command(AutoCopy);
@@ -123,27 +160,32 @@ int wmain()
         require(app.autoCopy && checked(), "Enabled auto copy must persist on reload.");
         // Selection capture uses the same completion path as instant/full-monitor capture.
         app.desktop = image;
-        app.selectionStart = {3, 4}; app.selectionEnd = {33, 24};
+        app.selectionStart = {3, 4};
+        app.selectionEnd = {33, 24};
         finishCapture();
         clipboardMatches(image.crop(3, 4, 30, 20));
         const auto beforeCancel = GetClipboardSequenceNumber();
         app.capturePending = true;
         cancelCapture();
         restoreRecentSnip(0);
-        require(GetClipboardSequenceNumber() == beforeCancel, "Cancel or reopening Recent copied a snip.");
+        require(GetClipboardSequenceNumber() == beforeCancel,
+                "Cancel or reopening Recent copied a snip.");
         app.smoke = true;
         acceptCapture(image);
-        require(GetClipboardSequenceNumber() == beforeCancel, "Diagnostic captures changed clipboard.");
+        require(GetClipboardSequenceNumber() == beforeCancel,
+                "Diagnostic captures changed clipboard.");
         app.smoke = false;
         // Another thread owns the clipboard so both automatic and manual failure paths run.
         const auto held = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         const auto release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         bool clipboardHeld = false;
         std::thread blocker([&] {
-            if (SetThreadDesktop(desktop)) clipboardHeld = OpenClipboard(nullptr) != FALSE;
+            if (SetThreadDesktop(desktop))
+                clipboardHeld = OpenClipboard(nullptr) != FALSE;
             SetEvent(held);
             WaitForSingleObject(release, 10000);
-            if (clipboardHeld) CloseClipboard();
+            if (clipboardHeld)
+                CloseClipboard();
         });
         WaitForSingleObject(held, 10000);
         bool failureHandled = false;
@@ -151,23 +193,31 @@ int wmain()
         {
             require(clipboardHeld, "Cannot hold private clipboard for failure test.");
             acceptCapture(image);
-            require(hasImage() && app.image.pixels == image.pixels && !app.copyFlashStarted &&
-                app.status.find(L"Clipboard is busy") == 0,
+            require(
+                hasImage() && app.image.pixels == image.pixels && !app.copyFlashStarted &&
+                    app.status.find(L"Clipboard is busy") == 0,
                 "Automatic Copy failure must retain the capture and report the busy clipboard.");
             command(Copy);
-            failureHandled = hasImage() && app.image.pixels == image.pixels && !app.copyFlashStarted &&
-                app.status.find(L"Clipboard is busy") == 0;
+            failureHandled = hasImage() && app.image.pixels == image.pixels &&
+                             !app.copyFlashStarted && app.status.find(L"Clipboard is busy") == 0;
         }
         catch (...)
         {
-            SetEvent(release); blocker.join(); CloseHandle(held); CloseHandle(release);
+            SetEvent(release);
+            blocker.join();
+            CloseHandle(held);
+            CloseHandle(release);
             throw;
         }
-        SetEvent(release); blocker.join(); CloseHandle(held); CloseHandle(release);
+        SetEvent(release);
+        blocker.join();
+        CloseHandle(held);
+        CloseHandle(release);
         require(failureHandled, "Busy clipboard must retain the new snip and avoid a false flash.");
         command(Copy);
         clipboardMatches(renderedExport());
-        require(!IsWindowVisible(app.window) || app.copyFlashStarted, "Visible retry Copy must flash.");
+        require(!IsWindowVisible(app.window) || app.copyFlashStarted,
+                "Visible retry Copy must flash.");
         auto large = Bitmap::create(3840, 2160);
         for (int y = 0; y < large.height; ++y)
             for (int x = 0; x < large.width; ++x)
@@ -180,26 +230,35 @@ int wmain()
             }
         const auto started = std::chrono::steady_clock::now();
         acceptCapture(std::move(large));
-        const auto elapsed = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - started).count();
+        const auto elapsed =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+                .count();
         clipboardMatches(renderedExport());
         std::cout << "4K capture completion including auto copy: " << elapsed << " ms\n";
-        std::cout << "PASS: default-on auto copy, Settings checkmark, persisted OFF/ON, new and selection "
-            "captures, PNG/DIB export, already-copied snip Ctrl+C and repeated copy, annotations, disabled capture, "
-            "cancel/Recent/diagnostic isolation, busy clipboard retention and retry. User clipboard untouched.\n";
+        std::cout << "PASS: default-on auto copy, Settings checkmark, persisted OFF/ON, new and "
+                     "selection "
+                     "captures, PNG/DIB export, already-copied snip Ctrl+C and repeated copy, "
+                     "inert plain letters, annotations, disabled capture, "
+                     "cancel/Recent/diagnostic isolation, busy clipboard retention and retry. User "
+                     "clipboard untouched.\n";
     }
     catch (const std::exception &exception)
     {
         std::cout << "FAIL: " << exception.what() << " Windows error=" << GetLastError() << '\n';
         result = 1;
     }
-    if (app.window && IsWindow(app.window)) DestroyWindow(app.window);
+    if (app.window && IsWindow(app.window))
+        DestroyWindow(app.window);
     resetPreview();
-    app.workspaceBrush.reset(); app.target.reset();
-    if (com) CoUninitialize();
+    app.workspaceBrush.reset();
+    app.target.reset();
+    if (com)
+        CoUninitialize();
     SetThreadDesktop(originalDesktop);
-    if (desktop) CloseDesktop(desktop);
+    if (desktop)
+        CloseDesktop(desktop);
     SetProcessWindowStation(originalStation);
-    if (station) CloseWindowStation(station);
+    if (station)
+        CloseWindowStation(station);
     return result;
 }

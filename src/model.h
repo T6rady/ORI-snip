@@ -67,6 +67,7 @@ struct Annotation
     Tool kind = Tool::Pen;
     Color color = rgb(239, 68, 68);
     float thickness = 4;
+    float opacity = 1;
     uint8_t style = 0;
     Point a, b;
     std::vector<Point> points;

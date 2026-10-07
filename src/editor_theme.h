@@ -147,6 +147,36 @@ HFONT rootMenuFont()
                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                        DEFAULT_PITCH, L"Segoe UI");
 }
+std::optional<RECT> darkMenuSeparator(HWND window)
+{
+    if (!app.darkTheme || !GetMenu(window) || IsIconic(window))
+        return {};
+    MENUBARINFO menu{};
+    menu.cbSize = sizeof(menu);
+    RECT bounds{}, client{};
+    POINT origin{};
+    if (!GetMenuBarInfo(window, OBJID_MENU, 0, &menu) || menu.rcBar.bottom <= menu.rcBar.top ||
+        !GetWindowRect(window, &bounds) || !GetClientRect(window, &client) ||
+        !ClientToScreen(window, &origin))
+        return {};
+    const int height = std::max(1, GetSystemMetricsForDpi(SM_CYBORDER, GetDpiForWindow(window)));
+    return RECT{origin.x - bounds.left, origin.y - bounds.top - height,
+                origin.x - bounds.left + client.right, origin.y - bounds.top};
+}
+void paintDarkMenuSeparator(HWND window)
+{
+    const auto line = darkMenuSeparator(window);
+    if (!line)
+        return;
+    const HDC dc = GetWindowDC(window);
+    if (!dc)
+        return;
+    // Windows paints this strip outside the client area after the owner-drawn menu.
+    const auto previous = SetDCBrushColor(dc, uiSurface());
+    FillRect(dc, &*line, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+    SetDCBrushColor(dc, previous);
+    ReleaseDC(window, dc);
+}
 void applyWindowTheme()
 {
     const BOOL dark = app.darkTheme;
@@ -173,6 +203,7 @@ void applyWindowTheme()
         SetMenuItemInfoW(menu, i, TRUE, &item);
     }
     DrawMenuBar(app.window);
+    paintDarkMenuSeparator(app.window);
 }
 void measureRootMenu(MEASUREITEMSTRUCT &item)
 {

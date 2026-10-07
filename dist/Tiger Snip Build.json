@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "builtAtUtc": "2026-10-07T13:05:06Z",
-  "sourceBaseCommit": "c31ed3cce8957b0cb9939b810cf5933906c69374",
+  "builtAtUtc": "2026-10-07T13:22:40Z",
+  "sourceBaseCommit": "45eda64257d9445372deca7f4724727d0bd91bff",
   "workingTreeHasUncommittedChanges": true,
   "compilerVersion": [
     "clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)",
@@ -75,16 +75,16 @@
   "powershellVersion": "7.6.5",
   "output": {
     "name": "Tiger Snip.exe",
-    "sha256": "A3EAC2EEA002D63FEB1150EC512B814B67CBA018B06DBFF721336AF531F77FD0"
+    "sha256": "2F77CFE61928DF1A69EDE094356CA4B291FBC69C2F2F2E3A903BC1615AC0326F"
   },
   "inputs": [
     {
       "path": "build.ps1",
-      "sha256": "54FF3B6D05944E665F6BF6CCC156A8438F5D9A4CDB9FBD8692DF5B34EEE67679"
+      "sha256": "015A9E70DFD587676CD5C96DE0ACB62C138C95B5A5EABE29DE199981B16E7D55"
     },
     {
       "path": "CMakeLists.txt",
-      "sha256": "1EEDB68CB058C77AD2519A4F78547D5CA8E6C2AE9817BC2FD00A83CCD009EA38"
+      "sha256": "F146E3951688F878CBA61075A758B5E8FE149E9EAF45886D107510918EFCE5A0"
     },
     {
       "path": "package.ps1",
@@ -188,7 +188,7 @@
     },
     {
       "path": "src\\editor_theme.h",
-      "sha256": "7F9C8BC85C3C22A737736EEB8C11FE461DBD99922702FFAD214ECFDBBC63CCA7"
+      "sha256": "22BA924E2686E95C77ABB061BC1A9116A2DAD974474AC41141376AF995A1A453"
     },
     {
       "path": "src\\file_io.cpp",
@@ -208,7 +208,7 @@
     },
     {
       "path": "src\\main.cpp",
-      "sha256": "BCD17E114C8EC2782CD74C175447E0905E833286218AEACDC19B7F41FC781872"
+      "sha256": "391BAE444D4197A8E0F930C1ECCBD692EA177A792EFE932B9FAE1B2CF65FC6A5"
     },
     {
       "path": "src\\model.cpp",
@@ -257,6 +257,10 @@
     {
       "path": "tests\\file_save.cpp",
       "sha256": "B1B3F02A5342EF25F2A7D408B33AA1E7EF8FCEFF2C9D4E19596CD1A95AA84EB8"
+    },
+    {
+      "path": "tests\\native_menu.cpp",
+      "sha256": "BC9942201F515D797A167BA052EDFFA72CB369813BA6FBD630B89538F5789BBE"
     },
     {
       "path": "tests\\robustness.cpp",

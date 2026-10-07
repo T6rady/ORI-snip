@@ -441,7 +441,8 @@ int paletteColumns()
 }
 float rowHeight(int row)
 {
-    constexpr float heights[] = {60, 63, 43};
+    // Match the 15 px title band with 15 px below the Draw and Shapes panels.
+    constexpr float heights[] = {60, 74, 43};
     if (app.collapsedRows & (1U << row))
         return 20;
     const int rows =
@@ -5644,6 +5645,12 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case WM_NCPAINT:
+    case WM_NCACTIVATE: {
+        const auto result = DefWindowProcW(hwnd, message, wp, lp);
+        paintDarkMenuSeparator(hwnd);
+        return result;
+    }
     case WM_PAINT: {
         PAINTSTRUCT p{};
         BeginPaint(hwnd, &p);

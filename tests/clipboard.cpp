@@ -19,7 +19,7 @@ int wmain()
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         if (!station || !SetProcessWindowStation(station))
             throw std::runtime_error("Cannot create isolated clipboard window station.");
-        desktop = CreateDesktopW(L"TigerSnipClipboardTest", nullptr, nullptr, 0,
+        desktop = CreateDesktopW(L"ORISnipClipboardTest", nullptr, nullptr, 0,
                                  DESKTOP_CREATEWINDOW | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS,
                                  nullptr);
         if (!desktop || !SetThreadDesktop(desktop))
@@ -89,7 +89,7 @@ int wmain()
             throw std::runtime_error("Clipboard export lost transparent padding or rounded corners.");
         verify(bordered);
         for (bool border : {false, true})
-            for (uint8_t style = 0; style < 6; ++style)
+            for (uint8_t style = 0; style < 2; ++style)
                 verify(graphics.exportImage(image, {}, {border, true, style}));
         for (bool blur : {false, true})
             for (bool rounded : {false, true})
@@ -98,12 +98,12 @@ int wmain()
                 options.professionalBlur = blur;
                 options.professionalRounded = rounded;
                 verify(graphics.exportImage(image, {}, options));
-                options.samtecLogo = true;
+                options.oriLogo = true;
                 verify(graphics.exportImage(image, {}, options));
             }
         std::cout << "PASS: isolated Windows clipboard; DIB and DIBV5 dimensions, top-down pixels, "
                      "alpha and color metadata; PNG-first payload and pixel-perfect round trip "
-                     "with independent blur/rounding and Professional Border and Samtec Logo OFF and ON. "
+                     "with independent blur/rounding and Professional Border and ORI Logo OFF and ON. "
                      "User clipboard untouched.\n";
     }
     catch (const std::exception &exception)

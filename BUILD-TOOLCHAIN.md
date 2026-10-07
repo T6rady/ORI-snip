@@ -1,4 +1,4 @@
-# Tiger Snip build toolchain
+# ORI Snip build toolchain
 
 The PowerShell build uses **LLVM-MinGW 20260922, x64 UCRT**, with Clang 23.1.2.
 
@@ -17,6 +17,6 @@ Build, test, and package:
 .\package.ps1
 ```
 
-The output is `dist/Tiger Snip.exe` and `dist/Tiger Snip Setup.msi`. The C++ runtime is statically linked; Windows provides the system graphics libraries. Runtime notices are included in the installer.
+The output is `dist/ORI Snip.exe` and `dist/ORI Snip Setup.msi`. The C++ runtime is statically linked; Windows provides the system graphics libraries. Runtime notices are included in the installer.
 
-`Tiger Snip Build.json` records the compiler, build options, source hashes, and executable hash. Packaging checks these hashes. `Tiger Snip Release.txt` records the installer and payload hashes.
+`ORI Snip Build.json` records the compiler, build options, source hashes, and executable hash. Packaging checks these hashes. `ORI Snip Release.txt` records the installer and payload hashes.

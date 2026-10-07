@@ -128,7 +128,7 @@ LRESULT CALLBACK spectrumProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("spectrumProcedure", message);
 #endif
@@ -172,7 +172,7 @@ INT_PTR CALLBACK colorPickerProcedure(HWND window, UINT message, WPARAM wp, LPAR
 {
     return callbackBoundary<INT_PTR>(
         [&]() -> INT_PTR {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("colorPickerProcedure", message);
 #endif

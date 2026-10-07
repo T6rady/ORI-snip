@@ -1,7 +1,7 @@
 #pragma once
 
 // Fault injection exists only in dedicated test builds.
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
 namespace snip::testing
 {
 inline void (*graphicsCheckpoint)(unsigned) = nullptr;

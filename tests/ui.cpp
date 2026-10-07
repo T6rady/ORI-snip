@@ -57,7 +57,7 @@ int wmain()
         };
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         require(station && SetProcessWindowStation(station), "Cannot isolate UI test station.");
-        desktop = CreateDesktopW(L"TigerSnipUITest", nullptr, nullptr, 0,
+        desktop = CreateDesktopW(L"ORISnipUITest", nullptr, nullptr, 0,
                                  DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS |
                                      DESKTOP_WRITEOBJECTS,
                                  nullptr);
@@ -84,7 +84,7 @@ int wmain()
                                               RenderingSettings, SaveLocation,
                                               Startup,           ProfessionalBorder,
                                               ProfessionalBlur,  ProfessionalRounded,
-                                              SamtecLogo,        ToggleActions,
+                                              ORILogo,        ToggleActions,
                                               ToggleTools,       ToggleFormatting,
                                               FullScreen,        About,
                                               InterfaceClassic,  InterfaceOrange,
@@ -96,10 +96,10 @@ int wmain()
         require(GetMenuState(app.colorThemeMenu, ThemeOrange, MF_BYCOMMAND) == static_cast<UINT>(-1) &&
                     GetMenuItemCount(app.colorThemeMenu) == 4,
                 "The native menu still offers the retired Orange preset.");
-        for (int style = 0; style < 6; ++style)
+        for (int style = 0; style < 2; ++style)
             require(GetMenuState(app.logoMenu, LogoStyleFirst + style, MF_BYCOMMAND) !=
                         static_cast<UINT>(-1),
-                    "A Samtec logo setting is missing.");
+                    "A ORI logo setting is missing.");
         std::array<HMENU, 5> submenus{};
         for (int i = 0; i < 5; ++i)
             submenus[i] = GetSubMenu(menu, i);
@@ -375,13 +375,13 @@ int wmain()
         for (int id : {InterfaceClassic, InterfaceOrange, ThemePurple, ThemeBlue,
                        ThemeTeal, ThemeCustom, AppearanceLight, AppearanceDark, SettingsRenderer, Startup,
                        SaveLocation, SettingsAreaKey, SettingsAllKey, AutoCopy, ProfessionalBorder,
-                       ProfessionalBlur, ProfessionalRounded, SamtecLogo, ToggleActions,
+                       ProfessionalBlur, ProfessionalRounded, ORILogo, ToggleActions,
                        ToggleTools, ToggleFormatting, FullScreen, Fit, Actual, NewSnip, InstantSnip,
                        RecentSnips, Copy, Save, SaveAs, Undo, Redo, DeleteSelected, Clear,
                        CropTool, EraserTool, Exit})
             require(std::find(panelCommands.begin(), panelCommands.end(), id) != panelCommands.end(),
                     "The modern Settings panel lost an existing option or action.");
-        for (int style = 0; style < 6; ++style)
+        for (int style = 0; style < 2; ++style)
             require(std::find(panelCommands.begin(), panelCommands.end(), LogoStyleFirst + style) !=
                         panelCommands.end(),
                     "The modern Settings panel lost a logo style.");

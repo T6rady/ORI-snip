@@ -91,7 +91,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                     hasImage() ? app.savePath.empty()
                                      ? L"Snip " + std::to_wstring(std::max(1U, app.recentSequence))
                                      : std::filesystem::path(app.savePath).filename().wstring()
-                               : L"Tiger Snip";
+                               : L"ORI Snip";
                 text(filename, {306, 11, right, 32}, Ink);
                 text(hasImage() ? app.dirty              ? L"Unsaved changes"
                                   : app.savePath.empty() ? L"Captured locally"

@@ -24,7 +24,7 @@ int wmain()
         INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_WIN95_CLASSES};
         InitCommonControlsEx(&controls);
         registerClasses();
-        require(CreateWindowExW(0, MainClass, L"Tiger Snip menu frame test", WS_OVERLAPPEDWINDOW,
+        require(CreateWindowExW(0, MainClass, L"ORI Snip menu frame test", WS_OVERLAPPEDWINDOW,
                                 20, 20, 1000, 700, nullptr, createMenu(), app.instance, nullptr),
                 "Cannot create the native menu test window.");
         app.windowedMenu = GetMenu(app.window);

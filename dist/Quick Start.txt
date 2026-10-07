@@ -1,19 +1,19 @@
-TIGER SNIP 1.0.2
+ORI SNIP 1.0.2
 
-For installation from the shared drive, double-click Tiger Snip Setup.msi once.
-Click Install. Setup confirms success; click Finish to open Tiger Snip with
-Launch Tiger Snip checked, or uncheck it to open the app later from the Start menu.
+For installation from the shared drive, double-click ORI Snip Setup.msi once.
+Click Install. Setup confirms success; click Finish to open ORI Snip with
+Launch ORI Snip checked, or uncheck it to open the app later from the Start menu.
 Silent/basic-UI installs, repairs, and removals do not open the app.
 No administrator elevation is
 required by this installer; your organization's installation policies still apply.
-The app is installed locally under %LOCALAPPDATA%\Programs\Tiger Snip.
-Personal settings are stored in %LOCALAPPDATA%\Tiger Snip\TigerSnip.ini.
+The app is installed locally under %LOCALAPPDATA%\Programs\ORI Snip.
+Personal settings are stored in %LOCALAPPDATA%\ORI Snip\ORISnip.ini.
 Each Windows user has their own settings. The installer includes no personal settings.
 Fresh installations use the new Side panels UI with the Purple light theme.
 Existing users keep their saved UI layout and colors.
-The standalone Tiger Snip.exe also runs directly and uses those same personal settings.
-Windows Installed apps can uninstall Tiger Snip; settings remain for reinstalling.
-To reset everything after uninstalling, delete %LOCALAPPDATA%\Tiger Snip.
+The standalone ORI Snip.exe also runs directly and uses those same personal settings.
+Windows Installed apps can uninstall ORI Snip; settings remain for reinstalling.
+To reset everything after uninstalling, delete %LOCALAPPDATA%\ORI Snip.
 The welcome screen picks one of ten workplace-friendly headlines each time it opens,
 including "The snipping tool of your dreams!" It avoids repeating the last one.
 
@@ -131,12 +131,12 @@ Other shortcuts need Ctrl or Alt; F12 is reserved.
 File and the tray menu also offer Capture all monitors now.
 
 General > Software rendering in Side panels switches immediately and saves the choice.
-Top toolbars offers Settings > Rendering... to switch how Tiger Snip draws its window.
+Top toolbars offers Settings > Rendering... to switch how ORI Snip draws its window.
 Check Use software rendering (compatibility mode) if resizing or maximizing
 freezes the window, leaves stale content, or takes seconds to redraw.
 Leave it unchecked for hardware acceleration, the default for most PCs.
 Software rendering may use more CPU on large displays. Click Apply to switch
-immediately and save the choice in your personal TigerSnip.ini settings file.
+immediately and save the choice in your personal ORISnip.ini settings file.
 No restart is needed. Copied and saved image quality is unchanged.
 
 Settings > Save location... lets you choose the default folder for saved snips.
@@ -154,13 +154,13 @@ Rounded corners alone keep the original dimensions.
 The screenshot content stays at its original size without tinting or fading.
 The individual settings are remembered on close/exit and appear immediately in the image preview.
 
-Settings > Samtec Logo is optional and OFF by default.
-Its submenu shows six choices: White badge and Soft watermark for the S, tiger, and wordmark.
+Settings > ORI Logo is optional and OFF by default.
+Its submenu offers the supplied ORI logo as a Dark badge or Soft watermark.
 Selecting a style enables it; uncheck Enabled to turn it off and keep that style.
-White badges have compact rounded backgrounds and soft gray halos.
+Dark badges have compact rounded backgrounds and soft gray halos.
 Soft watermarks are faint monochrome marks without a card or orange underline.
 They adapt to light/dark backgrounds; a subtle edge halo keeps the artwork visible.
-All logos are smaller, with the watermarks more compact than the white badges.
+All logos are smaller, with the watermarks more compact than the dark badges.
 The bottom-right logo scales with the snip and works with or without Professional Border.
 Small snips keep a recognizable minimum logo size; very tiny or narrow snips limit its footprint.
 Enabled and selected style are remembered on close/exit; the preview shows/hides the logo immediately.
@@ -170,7 +170,7 @@ Click Recent or press Ctrl+Shift+R to reopen a capture with its editable annotat
 Right-click a recent thumbnail and choose Copy to copy it directly with its annotations
 and current export effects, keeping your current snip open. The welcome capture icon
 also starts a new snip when clicked.
-Closing the window leaves Tiger Snip in the tray and retains those captures.
+Closing the window leaves ORI Snip in the tray and retains those captures.
 Closing, exiting, and taking a new snip happen immediately without a save prompt.
 Click the tray icon to snip. File > Exit quits entirely and clears the capture collection.
 Captures are not saved as projects or restored after restarting.
@@ -183,9 +183,9 @@ If Run at sign-in is enabled, disable it before uninstalling the app.
 The preview shows the same logo, blur, rounded corners, and padding as Copy and PNG Save.
 
 DATA HANDLING
-Tiger Snip has no application networking or telemetry. Recent captures, original crop
+ORI Snip has no application networking or telemetry. Recent captures, original crop
 pixels, and undo history stay in local process memory until Exit or oldest eviction.
-Copy places an image on the Windows clipboard, where it can remain after Tiger Snip exits.
+Copy places an image on the Windows clipboard, where it can remain after ORI Snip exits.
 Windows clipboard history/synchronization and other apps are controlled separately.
 Save writes a PNG wherever you choose, including a network or synchronized folder.
 An interrupted save can leave an adjacent temporary or recovery image file.
@@ -197,11 +197,11 @@ Maintainer/problem reports: Jack Kempf, jack.kempf@samtec.com.
 
 SAVING AND RECOVERY FILES
 Each save uses a unique temporary filename. Forced termination can leave an
-adjacent .tiger-snip-{GUID}.tmp or .tmp.previous recovery file containing image
+adjacent .ori-snip-{GUID}.tmp or .tmp.previous recovery file containing image
 data. It will not block later saves. Old leftovers are not automatically deleted;
 ask Jack/IT to inspect recovery needs before removing a specifically identified file.
 
 UPDATING THIS SAME 1.0.2 PACKAGE
-Close Tiger Snip and disable Run at sign-in if enabled. Uninstall the previous
+Close ORI Snip and disable Run at sign-in if enabled. Uninstall the previous
 copy using Windows Installed apps, then install the replacement MSI. Preferences
 survive. Do not bypass company installation/security policy to force a repair.

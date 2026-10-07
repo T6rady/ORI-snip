@@ -60,9 +60,9 @@ int wmain(int argc, wchar_t **argv)
         wchar_t id[40]{};
         StringFromGUID2(unique, id, static_cast<int>(std::size(id)));
         const std::wstring desktopName = L"LaunchTest";
-        className = L"TigerSnip.LaunchTest." + std::wstring(id);
-        const std::wstring readyName = L"Local\\TigerSnip.ReadyTest." + std::wstring(id);
-        const std::wstring mutexName = L"Local\\TigerSnip.InstanceTest." + std::wstring(id);
+        className = L"ORISnip.LaunchTest." + std::wstring(id);
+        const std::wstring readyName = L"Local\\ORISnip.ReadyTest." + std::wstring(id);
+        const std::wstring mutexName = L"Local\\ORISnip.InstanceTest." + std::wstring(id);
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         require(station && SetProcessWindowStation(station), "Cannot isolate test window station.");
         wchar_t stationName[256]{};

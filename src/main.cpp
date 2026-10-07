@@ -27,9 +27,9 @@
 using namespace snip;
 namespace
 {
-constexpr wchar_t MainClass[] = L"TigerSnip.Main.1", OverlayClass[] = L"TigerSnip.Capture.1",
-                  SettingsClass[] = L"TigerSnip.Settings.1",
-                  DiagnosticClass[] = L"TigerSnip.ResizeDiagnostic.1";
+constexpr wchar_t MainClass[] = L"ORISnip.Main.1", OverlayClass[] = L"ORISnip.Capture.1",
+                  SettingsClass[] = L"ORISnip.Settings.1",
+                  DiagnosticClass[] = L"ORISnip.ResizeDiagnostic.1";
 constexpr UINT TrayMessage = WM_APP + 20, LaunchMessage = WM_APP + 21;
 constexpr UINT CaptureTimer = 1, StatusTimer = 2, SmokeTimer = 3, CopyFlashTimer = 4,
                SizeRepeatTimer = 5, TraceHeartbeatTimer = 6;
@@ -72,7 +72,7 @@ enum Command
     ProfessionalBorder,
     ProfessionalBlur,
     ProfessionalRounded,
-    SamtecLogo,
+    ORILogo,
     SaveLocation,
     FullScreen,
     ToggleActions,
@@ -129,9 +129,7 @@ enum Command
     LogoStyleFirst = 1800,
     RecentChoiceFirst = RecentFirst
 };
-constexpr const wchar_t *LogoStyleNames[] = {
-    L"S - White badge",        L"S - Soft watermark",     L"Tiger - White badge",
-    L"Tiger - Soft watermark", L"Wordmark - White badge", L"Wordmark - Soft watermark"};
+constexpr const wchar_t *LogoStyleNames[] = {L"ORI - Dark badge", L"ORI - Soft watermark"};
 const std::array<Color, 8> Palette = {rgb(239, 68, 68),   rgb(249, 115, 22), rgb(250, 204, 21),
                                       rgb(34, 197, 94),   rgb(14, 165, 233), rgb(168, 85, 247),
                                       rgb(255, 255, 255), rgb(15, 23, 42)};
@@ -293,7 +291,7 @@ struct Application
     float settingsScroll = 0;
     size_t settingsButtonsStart = 0;
     std::wstring settingsError;
-    std::array<Bitmap, 6> settingsLogoPreviews;
+    std::array<Bitmap, 2> settingsLogoPreviews;
     unsigned inactiveCollapsedRows = 0;
     float inspectorScroll = 0;
     int sliderDrag = 0;
@@ -370,7 +368,7 @@ class ResizeTrace
         catch (...)
         {
             depth = 0;
-            OutputDebugStringW(L"Tiger Snip: resize tracing failed.\n");
+            OutputDebugStringW(L"ORI Snip: resize tracing failed.\n");
         }
     }
 };
@@ -422,7 +420,7 @@ void status(const std::wstring &text)
     app.status = text;
     // If the optional expiry timer fails, keep the message visible until the next action.
     if (!SetTimer(app.window, StatusTimer, 4500, nullptr))
-        OutputDebugStringW(L"Tiger Snip: status expiry timer unavailable.\n");
+        OutputDebugStringW(L"ORI Snip: status expiry timer unavailable.\n");
     repaint();
 }
 float dpiFor(HWND hwnd)
@@ -530,9 +528,9 @@ bool updateTextPreview(int editingText)
     if (app.exportOptions.professionalBorder && app.exportOptions.professionalRounded &&
         (left < 10 || top < 10 || right > app.image.width - 10 || bottom > app.image.height - 10))
         return false;
-    if (app.exportOptions.samtecLogo)
+    if (app.exportOptions.oriLogo)
     {
-        const auto logo = app.graphics.samtecLogoBounds(app.image, app.exportOptions.samtecStyle);
+        const auto logo = app.graphics.oriLogoBounds(app.image, app.exportOptions.oriStyle);
         if (left < logo.right && right > logo.left && top < logo.bottom && bottom > logo.top)
             return false;
     }
@@ -644,9 +642,9 @@ void loadToolPreferences()
         preferenceUInt(app.iniPath, L"Settings", L"ProfessionalBlur", 1) != 0;
     app.exportOptions.professionalRounded =
         preferenceUInt(app.iniPath, L"Settings", L"ProfessionalRounded", 1) != 0;
-    app.exportOptions.samtecLogo = preferenceUInt(app.iniPath, L"Settings", L"SamtecLogo", 0) != 0;
-    const UINT logoStyle = preferenceUInt(app.iniPath, L"Settings", L"SamtecLogoStyle", 0);
-    app.exportOptions.samtecStyle = logoStyle < 6 ? static_cast<uint8_t>(logoStyle) : 0;
+    app.exportOptions.oriLogo = preferenceUInt(app.iniPath, L"Settings", L"ORILogo", 0) != 0;
+    const UINT logoStyle = preferenceUInt(app.iniPath, L"Settings", L"ORILogoStyle", 0);
+    app.exportOptions.oriStyle = logoStyle < 2 ? static_cast<uint8_t>(logoStyle) : 0;
     app.exportPreferencesDirty = false;
     for (size_t i = 0; i < app.colors.size(); ++i)
     {
@@ -716,8 +714,8 @@ bool saveToolPreferences()
             setting(L"Settings", L"ProfessionalBorder", app.exportOptions.professionalBorder);
             setting(L"Settings", L"ProfessionalBlur", app.exportOptions.professionalBlur);
             setting(L"Settings", L"ProfessionalRounded", app.exportOptions.professionalRounded);
-            setting(L"Settings", L"SamtecLogo", app.exportOptions.samtecLogo);
-            setting(L"Settings", L"SamtecLogoStyle", app.exportOptions.samtecStyle);
+            setting(L"Settings", L"ORILogo", app.exportOptions.oriLogo);
+            setting(L"Settings", L"ORILogoStyle", app.exportOptions.oriStyle);
         }
         if (app.rendererPreferencesDirty)
             setting(L"Settings", L"SoftwareRendering", app.softwareRendering);
@@ -868,7 +866,7 @@ void toggleStartup()
     const auto path = executablePath();
     const bool enabled = snip::startupEnabled(path);
     setStartupEnabled(path, !enabled);
-    status(enabled ? L"Run at sign-in disabled" : L"Tiger Snip will start quietly at sign-in");
+    status(enabled ? L"Run at sign-in disabled" : L"ORI Snip will start quietly at sign-in");
 }
 void addTray()
 {
@@ -879,7 +877,7 @@ void addTray()
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = TrayMessage;
     data.hIcon = LoadIconW(app.instance, MAKEINTRESOURCEW(101));
-    wcscpy_s(data.szTip, L"Tiger Snip - click to snip; right-click for menu");
+    wcscpy_s(data.szTip, L"ORI Snip - click to snip; right-click for menu");
     app.tray = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
 }
 void removeTray()
@@ -917,7 +915,7 @@ void showEditor()
 }
 void updateTitle()
 {
-    std::wstring title = app.diagnosticInstance ? L"Tiger Snip - Resize diagnostic" : L"Tiger Snip";
+    std::wstring title = app.diagnosticInstance ? L"ORI Snip - Resize diagnostic" : L"ORI Snip";
     if (hasImage())
         title += L"  |  " + std::to_wstring(app.image.width) + L" x " +
                  std::to_wstring(app.image.height) + (app.dirty ? L"  *" : L"");
@@ -2275,10 +2273,10 @@ void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR con
         (app.softwareRendering ? TDF_VERIFICATION_FLAG_CHECKED : 0) |
         (callback ? TDF_CALLBACK_TIMER : 0));
     dialog.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-    dialog.pszWindowTitle = L"Rendering - Tiger Snip";
-    dialog.pszMainInstruction = L"Choose how Tiger Snip draws its window";
+    dialog.pszWindowTitle = L"Rendering - ORI Snip";
+    dialog.pszMainInstruction = L"Choose how ORI Snip draws its window";
     dialog.pszContent =
-        L"Enable software rendering if Tiger Snip freezes, shows stale content, or takes seconds "
+        L"Enable software rendering if ORI Snip freezes, shows stale content, or takes seconds "
         L"to "
         L"redraw when you resize or maximize the window.\n\n"
         L"Off: hardware acceleration (recommended for most PCs).\n"
@@ -2287,7 +2285,7 @@ void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR con
         L"Changes apply immediately and are remembered. Copied and saved image quality is "
         L"unchanged.";
     dialog.pszVerificationText = L"Use software rendering (compatibility mode)";
-    dialog.pszFooter = L"This setting affects Tiger Snip only.";
+    dialog.pszFooter = L"This setting affects ORI Snip only.";
     dialog.cButtons = 1;
     dialog.pButtons = buttons;
     dialog.nDefaultButton = IDOK;
@@ -2301,7 +2299,7 @@ void openRenderingSettings(PFTASKDIALOGCALLBACK callback = nullptr, LONG_PTR con
     if (choice == IDOK && !setSoftwareRendering(software != FALSE))
         error(app.window,
               "Rendering changed for this session, but the preference could not be saved. "
-              "Check that your personal Tiger Snip settings folder is writable.");
+              "Check that your personal ORI Snip settings folder is writable.");
 }
 void drawUIIcon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush, int id, Point origin,
                 Color foreground)
@@ -2863,7 +2861,7 @@ LRESULT CALLBACK textEditProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("textEditProcedure", message);
 #endif
@@ -4150,7 +4148,7 @@ bool chooseSave(std::wstring &path)
     else if (_wcsicmp(path.substr(dot).c_str(), L".png") != 0)
     {
         MessageBoxW(IsWindowVisible(app.window) ? app.window : nullptr,
-                    L"Tiger Snip saves PNG images. Use a filename ending in .png.", L"Save as PNG",
+                    L"ORI Snip saves PNG images. Use a filename ending in .png.", L"Save as PNG",
                     MB_OK | MB_ICONINFORMATION);
         return chooseSave(path);
     }
@@ -4218,7 +4216,7 @@ void trayMenu()
                 L"Auto copy new snips");
     AppendMenuW(menu, MF_STRING, SaveLocation, L"Save location...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, Exit, L"Exit Tiger Snip");
+    AppendMenuW(menu, MF_STRING, Exit, L"Exit ORI Snip");
     POINT point{};
     GetCursorPos(&point);
     SetForegroundWindow(app.window);
@@ -4295,7 +4293,7 @@ void drawLogoChoice(const DRAWITEMSTRUCT &draw)
     check(target->BindDC(draw.hDC, &draw.rcItem), "Cannot bind logo menu drawing.");
     Com<ID2D1SolidColorBrush> brush;
     check(target->CreateSolidColorBrush(color(Ink), brush.put()), "Cannot draw logo menu.");
-    auto badge = app.graphics.samtecBadge(style, 28, app.darkTheme);
+    auto badge = app.graphics.oriBadge(style, 28, app.darkTheme);
     for (size_t i = 0; i < badge.pixels.size(); i += 4)
         for (int c = 0; c < 3; ++c)
             badge.pixels[i + c] =
@@ -4317,9 +4315,9 @@ void drawLogoChoice(const DRAWITEMSTRUCT &draw)
     target->DrawBitmap(bitmap.get(),
                        {28 + (82 - w) / 2, (height - h) / 2, 28 + (82 + w) / 2, (height + h) / 2},
                        1, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-    brush->SetColor(color(style == app.exportOptions.samtecStyle ? Accent : Muted));
+    brush->SetColor(color(style == app.exportOptions.oriStyle ? Accent : Muted));
     target->DrawEllipse(D2D1::Ellipse({12, height / 2}, 4, 4), brush.get(), 1);
-    if (style == app.exportOptions.samtecStyle)
+    if (style == app.exportOptions.oriStyle)
         target->FillEllipse(D2D1::Ellipse({12, height / 2}, 2.5f, 2.5f), brush.get());
     brush->SetColor(color(selected ? uiAccentText() : Ink));
     app.graphics.font->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -4483,17 +4481,17 @@ void command(int id, bool editSelectedStyle)
         repaint();
         return;
     }
-    if (id >= LogoStyleFirst && id < LogoStyleFirst + 6)
+    if (id >= LogoStyleFirst && id < LogoStyleFirst + 2)
     {
-        app.exportOptions.samtecStyle = static_cast<uint8_t>(id - LogoStyleFirst);
-        app.exportOptions.samtecLogo = true;
+        app.exportOptions.oriStyle = static_cast<uint8_t>(id - LogoStyleFirst);
+        app.exportOptions.oriLogo = true;
         app.exportPreferencesDirty = true;
         if (hasImage())
         {
             app.dirty = true;
             updateTitle();
         }
-        status(std::wstring(L"Samtec Logo: ") + LogoStyleNames[app.exportOptions.samtecStyle]);
+        status(std::wstring(L"ORI Logo: ") + LogoStyleNames[app.exportOptions.oriStyle]);
         if (app.settingsPanelOpen)
             saveToolPreferencesOrNotify();
         return;
@@ -4915,11 +4913,11 @@ void command(int id, bool editSelectedStyle)
     case ProfessionalBorder:
     case ProfessionalBlur:
     case ProfessionalRounded:
-    case SamtecLogo: {
+    case ORILogo: {
         auto &option = id == ProfessionalBorder    ? app.exportOptions.professionalBorder
                        : id == ProfessionalBlur    ? app.exportOptions.professionalBlur
                        : id == ProfessionalRounded ? app.exportOptions.professionalRounded
-                                                   : app.exportOptions.samtecLogo;
+                                                   : app.exportOptions.oriLogo;
         option = !option;
         app.exportPreferencesDirty = true;
         if (hasImage())
@@ -4930,7 +4928,7 @@ void command(int id, bool editSelectedStyle)
         const wchar_t *label = id == ProfessionalBorder    ? L"Professional Border"
                                : id == ProfessionalBlur    ? L"Blur"
                                : id == ProfessionalRounded ? L"Rounded corners"
-                                                           : L"Samtec Logo";
+                                                           : L"ORI Logo";
         status(std::wstring(label) +
                (option ? L" enabled for copied and saved images" : L" disabled"));
         if (app.settingsPanelOpen)
@@ -4942,7 +4940,7 @@ void command(int id, bool editSelectedStyle)
         break;
     case About:
         MessageBoxW(app.window,
-                    L"Tiger Snip 1.0.2\n\nNative C++ screenshot editor.\nDeveloped by Jack "
+                    L"ORI Snip 1.0.2\n\nNative C++ screenshot editor.\nDeveloped by Jack "
                     L"Kempf\n\nCtrl+N: new snip\nCtrl+C: "
                     L"copy image with annotations\nCtrl+S: save PNG\nCtrl+Shift+S: Save As\nCtrl+Z "
                     L"/ Ctrl+Y: undo / redo\nChoose tools from the toolbar; plain letters do not "
@@ -4950,9 +4948,9 @@ void command(int id, bool editSelectedStyle)
                     L"zoom from Fit to 800%\nSelect + drag image: pan (also middle-drag or "
                     L"Space+drag)\nEsc: cancel capture or current "
                     L"edit\n\nClose the window to stay in the tray.\nFile > Exit quits "
-                    L"completely.\n\nShortcut settings are saved in your personal Tiger Snip "
+                    L"completely.\n\nShortcut settings are saved in your personal ORI Snip "
                     L"settings folder.",
-                    L"About Tiger Snip", MB_OK | MB_ICONINFORMATION);
+                    L"About ORI Snip", MB_OK | MB_ICONINFORMATION);
         break;
     case Exit:
         saveToolPreferencesOrNotify();
@@ -5098,7 +5096,7 @@ void openOverlay()
                 static_cast<uint8_t>(app.dimDesktop.pixels[i + c] * .48f);
     app.selecting = false;
     app.overlay = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, OverlayClass,
-                                  L"Tiger Snip selection", WS_POPUP, app.virtualX, app.virtualY,
+                                  L"ORI Snip selection", WS_POPUP, app.virtualX, app.virtualY,
                                   width, height, nullptr, nullptr, app.instance, nullptr);
     if (!app.overlay)
         throwWindowsError("Cannot open the selection overlay.");
@@ -5280,9 +5278,9 @@ HMENU createMenu()
     AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.professionalMenu),
                 L"&Professional Border");
     app.logoMenu = CreatePopupMenu();
-    AppendMenuW(app.logoMenu, MF_STRING, SamtecLogo, L"&Enabled");
+    AppendMenuW(app.logoMenu, MF_STRING, ORILogo, L"&Enabled");
     AppendMenuW(app.logoMenu, MF_SEPARATOR, 0, nullptr);
-    for (int style = 0; style < 6; ++style)
+    for (int style = 0; style < 2; ++style)
     {
         AppendMenuW(app.logoMenu, MF_OWNERDRAW, LogoStyleFirst + style,
                     reinterpret_cast<LPCWSTR>(style + 1));
@@ -5292,7 +5290,7 @@ HMENU createMenu()
         label.dwTypeData = const_cast<LPWSTR>(LogoStyleNames[style]);
         SetMenuItemInfoW(app.logoMenu, LogoStyleFirst + style, FALSE, &label);
     }
-    AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.logoMenu), L"Samtec &Logo");
+    AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.logoMenu), L"ORI &Logo");
     AppendMenuW(help, MF_STRING, About, L"&About and shortcuts");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(edit), L"&Edit");
@@ -5339,10 +5337,10 @@ void updateMenus()
         EnableMenuItem(menu, id,
                        MF_BYCOMMAND |
                            (app.exportOptions.professionalBorder ? MF_ENABLED : MF_GRAYED));
-    CheckMenuItem(menu, SamtecLogo,
-                  MF_BYCOMMAND | (app.exportOptions.samtecLogo ? MF_CHECKED : MF_UNCHECKED));
-    CheckMenuRadioItem(app.logoMenu, LogoStyleFirst, LogoStyleFirst + 5,
-                       LogoStyleFirst + app.exportOptions.samtecStyle, MF_BYCOMMAND);
+    CheckMenuItem(menu, ORILogo,
+                  MF_BYCOMMAND | (app.exportOptions.oriLogo ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuRadioItem(app.logoMenu, LogoStyleFirst, LogoStyleFirst + 1,
+                       LogoStyleFirst + app.exportOptions.oriStyle, MF_BYCOMMAND);
     auto enable = [&](int id, bool yes) {
         EnableMenuItem(menu, id, MF_BYCOMMAND | (yes ? MF_ENABLED : MF_GRAYED));
     };
@@ -5716,7 +5714,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
                 measureRootMenu(*item);
                 return TRUE;
             }
-            const bool logo = item->itemID >= LogoStyleFirst && item->itemID < LogoStyleFirst + 6;
+            const bool logo = item->itemID >= LogoStyleFirst && item->itemID < LogoStyleFirst + 2;
             item->itemWidth = static_cast<UINT>((logo ? 320 : 184) * app.dpi);
             item->itemHeight = static_cast<UINT>((logo ? 72 : 48) * app.dpi);
             return TRUE;
@@ -5729,7 +5727,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         {
             if (rootMenuItem(item->itemData))
                 drawRootMenu(*item);
-            else if (item->itemID >= LogoStyleFirst && item->itemID < LogoStyleFirst + 6)
+            else if (item->itemID >= LogoStyleFirst && item->itemID < LogoStyleFirst + 2)
                 drawLogoChoice(*item);
             else
                 drawShapeChoice(*item);
@@ -6075,7 +6073,7 @@ LRESULT CALLBACK mainProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("mainProcedure", message);
 #endif
@@ -6113,7 +6111,7 @@ LRESULT CALLBACK overlayProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("overlayProcedure", message);
 #endif
@@ -6184,7 +6182,7 @@ LRESULT CALLBACK shortcutFieldProcedure(HWND hwnd, UINT message, WPARAM wp, LPAR
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("shortcutFieldProcedure", message);
 #endif
@@ -6250,7 +6248,7 @@ LRESULT CALLBACK settingsProcedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp
 {
     return callbackBoundary<LRESULT>(
         [&]() -> LRESULT {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
             if (testing::callbackCheckpoint)
                 testing::callbackCheckpoint("settingsProcedure", message);
 #endif
@@ -8113,7 +8111,7 @@ class SmokeNoPromptGuard
             wchar_t name[80]{}, title[80]{};
             GetClassNameW(window, name, 80);
             GetWindowTextW(window, title, 80);
-            if (wcscmp(name, L"#32770") == 0 && wcscmp(title, L"Tiger Snip") == 0 &&
+            if (wcscmp(name, L"#32770") == 0 && wcscmp(title, L"ORI Snip") == 0 &&
                 GetDlgItem(window, IDNO))
             {
                 shown = true;
@@ -8163,7 +8161,7 @@ class SmokeHoverPopup
     RECT bounds{};
     SmokeHoverPopup(int x, int y)
     {
-        constexpr wchar_t className[] = L"TigerSnip.SmokeHoverHost.1";
+        constexpr wchar_t className[] = L"ORISnip.SmokeHoverHost.1";
         WNDCLASSW cls{};
         cls.lpfnWndProc = DefWindowProcW;
         cls.hInstance = app.instance;
@@ -8359,7 +8357,7 @@ int applicationMain(HINSTANCE instance, int show)
             if (GetTempPathW(MAX_PATH, temporary))
                 app.resizeTrace.open(
                     std::filesystem::path(temporary) /
-                    (L"Tiger Snip-resize-" + std::to_wstring(GetCurrentProcessId()) + L".log"));
+                    (L"ORI Snip-resize-" + std::to_wstring(GetCurrentProcessId()) + L".log"));
         }
         else if (wcscmp(argv[i], L"--verify-smoke-preferences") == 0)
             verifyPreferences = true;
@@ -8430,20 +8428,20 @@ int applicationMain(HINSTANCE instance, int show)
                 app.palette != PersistenceTestPalette || app.paletteDirty ||
                 app.tool != Tool::Select || app.toolPreferencesDirty || app.fontSize != 40 ||
                 !app.textBold || !app.textBox || app.geometryTool != Tool::Rectangle ||
-                !app.exportOptions.professionalBorder || !app.exportOptions.samtecLogo ||
+                !app.exportOptions.professionalBorder || !app.exportOptions.oriLogo ||
                 app.exportPreferencesDirty || app.exportOptions.professionalBlur ||
                 !app.exportOptions.professionalRounded ||
                 app.saveFolder !=
                     (std::filesystem::path(testDirectory) / L"smoke-save location").wstring() ||
                 app.collapsedRows != 6 || app.layoutPreferencesDirty || app.fullScreen ||
-                app.exportOptions.samtecStyle != 5)
+                app.exportOptions.oriStyle != 1)
                 throw std::runtime_error(
                     "Tool preferences did not survive a complete process exit.");
             writeTestReport(
                 L"preference-test-results.txt",
                 "PASS: a fresh process restored every tool's style and custom color after full "
                 "exit; "
-                "Professional Border with separate blur/rounding, Samtec Logo and selected style, "
+                "Professional Border with separate blur/rounding, ORI Logo and selected style, "
                 "save location, collapsed rows, and both capture shortcuts restored, active tool "
                 "unchanged, no pending preference write.\n");
         }
@@ -8475,8 +8473,8 @@ int applicationMain(HINSTANCE instance, int show)
         {
             const std::wstring mutexName =
                 app.diagnosticInstance
-                    ? L"Local\\TigerSnip.ResizeDiagnostic." + std::to_wstring(GetCurrentProcessId())
-                    : L"Local\\TigerSnip.SingleInstance.1";
+                    ? L"Local\\ORISnip.ResizeDiagnostic." + std::to_wstring(GetCurrentProcessId())
+                    : L"Local\\ORISnip.SingleInstance.1";
             mutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
             if (!mutex)
                 throw std::runtime_error("Cannot initialize the app instance.");
@@ -8493,12 +8491,12 @@ int applicationMain(HINSTANCE instance, int show)
             app.taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
             registerClasses();
             auto path = executablePath();
-            app.iniPath = path.substr(0, path.find_last_of(L"\\/") + 1) + L"TigerSnip.ini";
+            app.iniPath = path.substr(0, path.find_last_of(L"\\/") + 1) + L"ORISnip.ini";
             if (!app.smoke && !app.resizeTest && !app.diagnosticInstance)
                 app.iniPath = personalSettingsPath();
             if (app.smoke)
             {
-                if (app.exportOptions.professionalBorder || app.exportOptions.samtecLogo ||
+                if (app.exportOptions.professionalBorder || app.exportOptions.oriLogo ||
                     app.exportPreferencesDirty)
                     throw std::runtime_error(
                         "Professional Border must start OFF without saved preferences.");
@@ -8510,7 +8508,7 @@ int applicationMain(HINSTANCE instance, int show)
                 loadToolPreferences();
             if (app.resizeTrace.is_open())
             {
-                app.resizeTrace << "Tiger Snip resize trace; pid=" << GetCurrentProcessId()
+                app.resizeTrace << "ORI Snip resize trace; pid=" << GetCurrentProcessId()
                                 << "; build=" << __DATE__ << " " << __TIME__ << "; renderer="
                                 << (app.softwareRendering ? "software" : "hardware/default")
                                 << "\n";
@@ -8523,7 +8521,7 @@ int applicationMain(HINSTANCE instance, int show)
                     throwWindowsError("Cannot create isolated diagnostic settings.");
                 app.iniPath =
                     (std::filesystem::path(temporary) /
-                     (L"Tiger Snip-diagnostic-" + std::to_wstring(GetCurrentProcessId()) + L".ini"))
+                     (L"ORI Snip-diagnostic-" + std::to_wstring(GetCurrentProcessId()) + L".ini"))
                         .wstring();
             }
             app.hotkey =
@@ -8550,7 +8548,7 @@ int applicationMain(HINSTANCE instance, int show)
                     std::min(static_cast<int>(800 * dpi), static_cast<int>(work.bottom - work.top));
             HWND window = CreateWindowExW(
                 0, app.diagnosticInstance ? DiagnosticClass : MainClass,
-                app.diagnosticInstance ? L"Tiger Snip - Resize diagnostic" : L"Tiger Snip",
+                app.diagnosticInstance ? L"ORI Snip - Resize diagnostic" : L"ORI Snip",
                 WS_OVERLAPPEDWINDOW, work.left + (work.right - work.left - width) / 2,
                 work.top + (work.bottom - work.top - height) / 2, width, height, nullptr,
                 createMenu(), instance, nullptr);
@@ -9591,53 +9589,53 @@ int applicationMain(HINSTANCE instance, int show)
                     throw std::runtime_error(smokeMenuPreviewError);
                 for (bool logo : {true, false})
                 {
-                    SendMessageW(window, WM_COMMAND, SamtecLogo, 0);
+                    SendMessageW(window, WM_COMMAND, ORILogo, 0);
                     updateMenus();
-                    if (app.exportOptions.samtecLogo != logo ||
-                        bool(GetMenuState(GetMenu(window), SamtecLogo, MF_BYCOMMAND) &
+                    if (app.exportOptions.oriLogo != logo ||
+                        bool(GetMenuState(GetMenu(window), ORILogo, MF_BYCOMMAND) &
                              MF_CHECKED) != logo)
                         throw std::runtime_error(
-                            "Samtec Logo Settings toggle or checkmark failed.");
+                            "ORI Logo Settings toggle or checkmark failed.");
                     const auto exported = renderedExport();
                     if (exported.width != app.image.width + 40 ||
                         exported.height != app.image.height + 40)
                         throw std::runtime_error(
-                            "Samtec Logo changed exported screenshot dimensions.");
+                            "ORI Logo changed exported screenshot dimensions.");
                     app.savePath =
-                        logo ? L"smoke-test-samtec-logo.png" : L"smoke-test-samtec-off.png";
+                        logo ? L"smoke-test-ori-logo.png" : L"smoke-test-ori-off.png";
                     command(Save);
                     std::ifstream saved(std::filesystem::path(app.savePath), std::ios::binary);
                     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)), {});
                     if (app.graphics.decode(bytes).pixels != exported.pixels)
-                        throw std::runtime_error("PNG Save did not honor the Samtec Logo setting.");
+                        throw std::runtime_error("PNG Save did not honor the ORI Logo setting.");
                 }
-                command(SamtecLogo); // Verify the logo setting survives close and full exit.
-                if (GetMenuItemCount(app.logoMenu) != 8)
+                command(ORILogo); // Verify the logo setting survives close and full exit.
+                if (GetMenuItemCount(app.logoMenu) != 4)
                     throw std::runtime_error(
-                        "Samtec Logo submenu must contain Enabled and six styles.");
-                for (int style = 0; style < 6; ++style)
+                        "ORI Logo submenu must contain Enabled and two styles.");
+                for (int style = 0; style < 2; ++style)
                 {
                     command(LogoStyleFirst + style);
                     updateMenus();
-                    if (!app.exportOptions.samtecLogo || app.exportOptions.samtecStyle != style ||
+                    if (!app.exportOptions.oriLogo || app.exportOptions.oriStyle != style ||
                         !(GetMenuState(app.logoMenu, LogoStyleFirst + style, MF_BYCOMMAND) &
                           MF_CHECKED))
                         throw std::runtime_error(
-                            "Samtec Logo style selection or radio indicator failed.");
+                            "ORI Logo style selection or radio indicator failed.");
                     const auto exported = renderedExport();
                     app.savePath =
-                        L"smoke-test-samtec-style-" + std::to_wstring(style + 1) + L".png";
+                        L"smoke-test-ori-style-" + std::to_wstring(style + 1) + L".png";
                     command(Save);
                     std::ifstream saved(std::filesystem::path(app.savePath), std::ios::binary);
                     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(saved)), {});
                     if (app.graphics.decode(bytes).pixels != exported.pixels)
-                        throw std::runtime_error("Save PNG did not honor a Samtec logo style.");
+                        throw std::runtime_error("Save PNG did not honor a ORI logo style.");
                 }
-                smokeMenuPreviewPath = L"smoke-test-samtec-menu.png";
+                smokeMenuPreviewPath = L"smoke-test-ori-menu.png";
                 smokeMenuPreviewError.clear();
                 app.shapeMenu = app.logoMenu;
                 if (!SetTimer(window, 99, 100, smokeShapeMenuTimer))
-                    throw std::runtime_error("Cannot inspect the Samtec style menu.");
+                    throw std::runtime_error("Cannot inspect the ORI style menu.");
                 POINT menuAnchor{20, 40};
                 ClientToScreen(window, &menuAnchor);
                 SetForegroundWindow(window);
@@ -9724,11 +9722,11 @@ int applicationMain(HINSTANCE instance, int show)
                                 app.exportOptions.professionalBorder = professional;
                                 app.exportOptions.professionalBlur = blur;
                                 app.exportOptions.professionalRounded = rounded;
-                                app.exportOptions.samtecLogo = logo;
+                                app.exportOptions.oriLogo = logo;
                                 verifyStyledPreview();
                             }
                 app.exportOptions = previewTestOptions;
-                for (uint8_t style = 0; style < 6; ++style)
+                for (uint8_t style = 0; style < 2; ++style)
                 {
                     command(LogoStyleFirst + style);
                     const auto scene = verifyStyledPreview();
@@ -10045,7 +10043,7 @@ int applicationMain(HINSTANCE instance, int show)
                     command(ProfessionalBorder);
                 command(ToggleTools);
                 command(ToggleFormatting);
-                command(LogoStyleFirst + 5);
+                command(LogoStyleFirst + 1);
                 const auto closeColors = app.colors;
                 const auto closeStyles = app.styles;
                 if (app.exportOptions.professionalBlur)
@@ -10066,8 +10064,8 @@ int applicationMain(HINSTANCE instance, int show)
                 app.exportOptions.professionalBorder = false;
                 app.exportOptions.professionalBlur = true;
                 app.exportOptions.professionalRounded = false;
-                app.exportOptions.samtecLogo = false;
-                app.exportOptions.samtecStyle = 0;
+                app.exportOptions.oriLogo = false;
+                app.exportOptions.oriStyle = 0;
                 const auto closedTool = app.tool;
                 loadToolPreferences();
                 if (app.colors != closeColors || app.styles != closeStyles ||
@@ -10076,9 +10074,9 @@ int applicationMain(HINSTANCE instance, int show)
                         "Closing lost tool colors/styles or changed the active tool.");
                 if (app.fontSize != 40 || !app.textBold || !app.textBox ||
                     app.geometryTool != Tool::Rectangle || !app.exportOptions.professionalBorder ||
-                    !app.exportOptions.samtecLogo || app.collapsedRows != 6 ||
+                    !app.exportOptions.oriLogo || app.collapsedRows != 6 ||
                     app.exportOptions.professionalBlur || !app.exportOptions.professionalRounded ||
-                    app.exportOptions.samtecStyle != 5)
+                    app.exportOptions.oriStyle != 1)
                     throw std::runtime_error(
                         "Text formatting or geometry group preferences were lost.");
                 // A later change must be written by the full-exit path, not the earlier close.
@@ -10132,7 +10130,7 @@ int applicationMain(HINSTANCE instance, int show)
                     "100/150/200% DPI, "
                     "annotated PNG export, Professional Border Settings toggle/checkmark, "
                     "actual PNG save with every independent blur/rounding combination, "
-                    "professional submenu and persistence, Samtec Logo toggle/checkmark, six "
+                    "professional submenu and persistence, ORI Logo toggle/checkmark, two "
                     "visual styles and PNG Save, "
                     "styled preview/export equality for all settings and logo styles, alpha "
                     "compositing, cache invalidation, copy flash visibility, expiry, and unchanged "

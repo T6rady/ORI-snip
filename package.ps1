@@ -1,14 +1,14 @@
 param([string]$OutputPath)
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
-if (-not $OutputPath) { $OutputPath = Join-Path $taskRoot 'dist\Tiger Snip Setup.msi' }
+if (-not $OutputPath) { $OutputPath = Join-Path $taskRoot 'dist\ORI Snip Setup.msi' }
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 if ([IO.Path]::GetExtension($OutputPath) -ne '.msi') { throw 'OutputPath must name an MSI file.' }
 New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($OutputPath)) | Out-Null
 $taskStage = Join-Path $taskRoot 'build\package'
 New-Item -ItemType Directory -Force -Path $taskStage | Out-Null
 $taskPayload = @(
-    @{ Id = 'AppExe'; Source = 'dist\Tiger Snip.exe'; Name = 'TIGERS~1.EXE|Tiger Snip.exe' },
+    @{ Id = 'AppExe'; Source = 'dist\ORI Snip.exe'; Name = 'ORISNI~1.EXE|ORI Snip.exe' },
     @{ Id = 'QuickStart'; Source = 'dist\Quick Start.txt'; Name = 'QUICKS~1.TXT|Quick Start.txt' },
     @{ Id = 'LLVMNotice'; Source = 'dist\LLVM.txt'; Name = 'LLVM.txt' },
     @{ Id = 'MinGWNotice'; Source = 'dist\MinGW-runtime.txt'; Name = 'MINGWR~1.TXT|MinGW-runtime.txt' }
@@ -18,13 +18,13 @@ foreach ($taskFile in $taskPayload) {
     if (-not (Test-Path -LiteralPath $taskFile.Path -PathType Leaf)) { throw "Missing $($taskFile.Source); run build.ps1 first." }
 }
 $taskVersionInfo = (Get-Item -LiteralPath $taskPayload[0].Path).VersionInfo
-$taskBuildRecordPath = Join-Path $taskRoot 'dist\Tiger Snip Build.json'
+$taskBuildRecordPath = Join-Path $taskRoot 'dist\ORI Snip Build.json'
 if (-not (Test-Path -LiteralPath $taskBuildRecordPath)) { throw 'Run build.ps1 first to create the build record.' }
 $taskBuildRecord = Get-Content -LiteralPath $taskBuildRecordPath -Raw | ConvertFrom-Json
 if ($taskBuildRecord.formatVersion -ne 1 -or -not $taskBuildRecord.inputs.Count) {
     throw 'The build record is incomplete or unsupported. Run build.ps1 again.'
 }
-if ($taskBuildRecord.output.name -ne 'Tiger Snip.exe' -or
+if ($taskBuildRecord.output.name -ne 'ORI Snip.exe' -or
     $taskBuildRecord.output.sha256 -ne (Get-FileHash -LiteralPath $taskPayload[0].Path -Algorithm SHA256).Hash) {
     throw 'The executable does not match its build record. Run build.ps1 again.'
 }
@@ -34,7 +34,7 @@ foreach ($taskInput in $taskBuildRecord.inputs) {
     }
 }
 $taskVersion = '{0}.{1}.{2}.{3}' -f $taskVersionInfo.FileMajorPart, $taskVersionInfo.FileMinorPart, $taskVersionInfo.FileBuildPart, $taskVersionInfo.FilePrivatePart
-if ($taskVersion -ne '1.0.2.0') { throw 'This package definition expects Tiger Snip 1.0.2.0.' }
+if ($taskVersion -ne '1.0.2.0') { throw 'This package definition expects ORI Snip 1.0.2.0.' }
 
 # A self-contained cabinet holds only the release files, never personal preferences.
 $taskCab = Join-Path $taskStage 'payload.cab'
@@ -109,7 +109,7 @@ try {
     )
     foreach ($taskSql in $taskSchema) { Invoke-MsiSql $taskSql }
     $taskProperties = [ordered]@{
-        ProductCode = $taskProductCode; ProductName = 'Tiger Snip'; ProductVersion = '1.0.2'
+        ProductCode = $taskProductCode; ProductName = 'ORI Snip'; ProductVersion = '1.0.2'
         ProductLanguage = '1033'; Manufacturer = 'Jack Kempf'
         UpgradeCode = '{74410596-744A-4B20-8FBA-F55363372B9A}'; INSTALLLEVEL = '1'
         ARPNOMODIFY = '1'; ARPCOMMENTS = 'Local screenshot capture and annotation utility.'
@@ -120,11 +120,11 @@ try {
     }
     foreach ($taskRow in @(
         @('TARGETDIR', $null, 'SourceDir'), @('LocalAppDataFolder', 'TARGETDIR', '.'),
-        @('ProgramsFolder', 'LocalAppDataFolder', 'Programs'), @('INSTALLFOLDER', 'ProgramsFolder', 'TIGERS~1|Tiger Snip'),
-        @('ProgramMenuFolder', 'TARGETDIR', '.'), @('TigerMenu', 'ProgramMenuFolder', 'TIGERS~1|Tiger Snip')
+        @('ProgramsFolder', 'LocalAppDataFolder', 'Programs'), @('INSTALLFOLDER', 'ProgramsFolder', 'ORISNI~1|ORI Snip'),
+        @('ProgramMenuFolder', 'TARGETDIR', '.'), @('ORIMenu', 'ProgramMenuFolder', 'ORISNI~1|ORI Snip')
     )) { Invoke-MsiSql 'INSERT INTO `Directory` (`Directory`, `Directory_Parent`, `DefaultDir`) VALUES (?, ?, ?)' $taskRow }
     Invoke-MsiSql 'INSERT INTO `Component` (`Component`, `ComponentId`, `Directory_`, `Attributes`, `KeyPath`) VALUES (?, ?, ?, ?, ?)' @('AppFiles', '{ADAB546A-CE97-4DED-8934-F080D67BB0C7}', 'INSTALLFOLDER', 260, 'AppInstallDir')
-    Invoke-MsiSql 'INSERT INTO `Feature` (`Feature`, `Title`, `Display`, `Level`, `Directory_`, `Attributes`) VALUES (?, ?, ?, ?, ?, ?)' @('Main', 'Tiger Snip', 1, 1, 'INSTALLFOLDER', 0)
+    Invoke-MsiSql 'INSERT INTO `Feature` (`Feature`, `Title`, `Display`, `Level`, `Directory_`, `Attributes`) VALUES (?, ?, ?, ?, ?, ?)' @('Main', 'ORI Snip', 1, 1, 'INSTALLFOLDER', 0)
     Invoke-MsiSql 'INSERT INTO `FeatureComponents` (`Feature_`, `Component_`) VALUES (?, ?)' @('Main', 'AppFiles')
     $taskSequence = 0
     foreach ($taskFile in $taskPayload) {
@@ -134,12 +134,12 @@ try {
         Invoke-MsiSql 'INSERT INTO `File` (`File`, `Component_`, `FileName`, `FileSize`, `Version`, `Attributes`, `Sequence`) VALUES (?, ?, ?, ?, ?, ?, ?)' @($taskFile.Id, 'AppFiles', $taskFile.Name, [int](Get-Item -LiteralPath $taskFile.Path).Length, $taskFileVersion, 16384, $taskSequence)
     }
     Invoke-MsiSql 'INSERT INTO `Media` (`DiskId`, `LastSequence`, `Cabinet`) VALUES (?, ?, ?)' @(1, $taskSequence, '#payload.cab')
-    Invoke-MsiSql 'INSERT INTO `Registry` (`Registry`, `Root`, `Key`, `Name`, `Value`, `Component_`) VALUES (?, ?, ?, ?, ?, ?)' @('AppInstallDir', 1, 'Software\Tiger Snip', 'InstallDir', '[INSTALLFOLDER]', 'AppFiles')
-    Invoke-MsiSql 'INSERT INTO `Shortcut` (`Shortcut`, `Directory_`, `Name`, `Component_`, `Target`, `Description`, `ShowCmd`, `WkDir`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)' @('StartMenu', 'TigerMenu', 'TIGERS~1|Tiger Snip', 'AppFiles', '[INSTALLFOLDER]Tiger Snip.exe', 'Capture and annotate screenshots', 1, 'INSTALLFOLDER')
-    foreach ($taskFolder in @('INSTALLFOLDER', 'TigerMenu')) {
+    Invoke-MsiSql 'INSERT INTO `Registry` (`Registry`, `Root`, `Key`, `Name`, `Value`, `Component_`) VALUES (?, ?, ?, ?, ?, ?)' @('AppInstallDir', 1, 'Software\ORI Snip', 'InstallDir', '[INSTALLFOLDER]', 'AppFiles')
+    Invoke-MsiSql 'INSERT INTO `Shortcut` (`Shortcut`, `Directory_`, `Name`, `Component_`, `Target`, `Description`, `ShowCmd`, `WkDir`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)' @('StartMenu', 'ORIMenu', 'ORISNI~1|ORI Snip', 'AppFiles', '[INSTALLFOLDER]ORI Snip.exe', 'Capture and annotate screenshots', 1, 'INSTALLFOLDER')
+    foreach ($taskFolder in @('INSTALLFOLDER', 'ORIMenu')) {
         Invoke-MsiSql 'INSERT INTO `RemoveFile` (`FileKey`, `Component_`, `DirProperty`, `InstallMode`) VALUES (?, ?, ?, ?)' @($taskFolder, 'AppFiles', $taskFolder, 2)
     }
-    Invoke-MsiSql 'INSERT INTO `LaunchCondition` (`Condition`, `Description`) VALUES (?, ?)' @('VersionNT64', 'Tiger Snip requires 64-bit Windows.')
+    Invoke-MsiSql 'INSERT INTO `LaunchCondition` (`Condition`, `Description`) VALUES (?, ?)' @('VersionNT64', 'ORI Snip requires 64-bit Windows.')
     $taskActions = [ordered]@{
         LaunchConditions = 100; CostInitialize = 800; FileCost = 900; CostFinalize = 1000
         InstallValidate = 1400; InstallInitialize = 1500; ProcessComponents = 1600
@@ -156,7 +156,7 @@ try {
     # has committed. There is no launch action in the execute sequence, so silent
     # deployment, repair, cancellation, failure, and removal cannot open the app.
     # 210 = installed-file EXE (18) + asynchronous/no-wait (192).
-    Invoke-MsiSql 'INSERT INTO `CustomAction` (`Action`, `Type`, `Source`, `Target`) VALUES (?, ?, ?, ?)' @('LaunchTigerSnip', 210, 'AppExe', '--open')
+    Invoke-MsiSql 'INSERT INTO `CustomAction` (`Action`, `Type`, `Source`, `Target`) VALUES (?, ?, ?, ?)' @('LaunchORISnip', 210, 'AppExe', '--open')
     Invoke-MsiSql 'INSERT INTO `CheckBox` (`Property`, `Value`) VALUES (?, ?)' @('LAUNCHAPP', '1')
     foreach ($taskRow in @(@('Normal', 'Segoe UI', 10, 0), @('Heading', 'Segoe UI', 14, 1), @('Footer', 'Segoe UI', 9, 0))) {
         Invoke-MsiSql 'INSERT INTO `TextStyle` (`TextStyle`, `FaceName`, `Size`, `StyleBits`) VALUES (?, ?, ?, ?)' $taskRow
@@ -182,36 +182,36 @@ try {
         @('RemovedDlg', 3, 'Close', 'Close', 'Close'),
         @('MaintenanceDlg', 3, 'Close', 'Close', 'Close')
     )) {
-        Invoke-MsiSql 'INSERT INTO `Dialog` (`Dialog`, `HCentering`, `VCentering`, `Width`, `Height`, `Attributes`, `Title`, `Control_First`, `Control_Default`, `Control_Cancel`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' @($taskRow[0], 50, 50, 360, 210, $taskRow[1], 'Tiger Snip Setup', $taskRow[2], $taskRow[3], $taskRow[4])
+        Invoke-MsiSql 'INSERT INTO `Dialog` (`Dialog`, `HCentering`, `VCentering`, `Width`, `Height`, `Attributes`, `Title`, `Control_First`, `Control_Default`, `Control_Cancel`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' @($taskRow[0], 50, 50, 360, 210, $taskRow[1], 'ORI Snip Setup', $taskRow[2], $taskRow[3], $taskRow[4])
     }
     $taskControls = @(
-        @('WelcomeDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Install Tiger Snip', $null),
-        @('WelcomeDlg', 'Details', 'Text', 20, 98, 320, 65, 3, $null, 'Capture, annotate, and share screenshots. Setup installs Tiger Snip for your Windows account and adds it to the Start menu.', $null),
+        @('WelcomeDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Install ORI Snip', $null),
+        @('WelcomeDlg', 'Details', 'Text', 20, 98, 320, 65, 3, $null, 'Capture, annotate, and share screenshots. Setup installs ORI Snip for your Windows account and adds it to the Start menu.', $null),
         @('WelcomeDlg', 'Install', 'PushButton', 180, 174, 75, 23, 3, $null, '&Install', 'Cancel'),
         @('WelcomeDlg', 'Cancel', 'PushButton', 265, 174, 75, 23, 3, $null, 'Cancel', 'Install'),
-        @('ProgressDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Updating Tiger Snip', $null),
+        @('ProgressDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Updating ORI Snip', $null),
         @('ProgressDlg', 'Details', 'Text', 20, 98, 320, 35, 3, $null, 'Please wait while setup makes the requested changes.', $null),
         @('ProgressDlg', 'Progress', 'ProgressBar', 20, 140, 320, 16, 3, $null, $null, $null),
         @('ProgressDlg', 'Cancel', 'PushButton', 265, 174, 75, 23, 3, $null, 'Cancel', 'Cancel'),
-        @('FinishedDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Tiger Snip is installed', $null),
-        @('FinishedDlg', 'Details', 'Text', 20, 98, 320, 42, 3, $null, 'Setup completed successfully. You can also open Tiger Snip anytime from the Windows Start menu.', $null),
-        @('FinishedDlg', 'Launch', 'CheckBox', 20, 144, 320, 22, 3, 'LAUNCHAPP', 'Launch Tiger Snip', 'Finish'),
+        @('FinishedDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}ORI Snip is installed', $null),
+        @('FinishedDlg', 'Details', 'Text', 20, 98, 320, 42, 3, $null, 'Setup completed successfully. You can also open ORI Snip anytime from the Windows Start menu.', $null),
+        @('FinishedDlg', 'Launch', 'CheckBox', 20, 144, 320, 22, 3, 'LAUNCHAPP', 'Launch ORI Snip', 'Finish'),
         @('FinishedDlg', 'Finish', 'PushButton', 265, 174, 75, 23, 3, $null, '&Finish', 'Launch'),
         # The close/X/Escape action dismisses success without launching.
         @('FinishedDlg', 'Close', 'PushButton', 180, 174, 75, 23, 2, $null, 'Close', $null)
     )
     foreach ($taskRow in @(
-        @('CanceledDlg', 'Setup canceled', 'Setup was canceled. Tiger Snip was not newly installed by this attempt.'),
-        @('FailedDlg', 'Setup could not finish', 'Tiger Snip setup did not complete successfully. Contact IT or Jack Kempf for help.'),
-        @('RemovedDlg', 'Tiger Snip was removed', 'The app has been uninstalled. Your personal preferences remain for a future installation.'),
-        @('MaintenanceDlg', 'Tiger Snip setup is complete', 'The requested changes completed successfully. Open Tiger Snip from the Windows Start menu.')
+        @('CanceledDlg', 'Setup canceled', 'Setup was canceled. ORI Snip was not newly installed by this attempt.'),
+        @('FailedDlg', 'Setup could not finish', 'ORI Snip setup did not complete successfully. Contact IT or Jack Kempf for help.'),
+        @('RemovedDlg', 'ORI Snip was removed', 'The app has been uninstalled. Your personal preferences remain for a future installation.'),
+        @('MaintenanceDlg', 'ORI Snip setup is complete', 'The requested changes completed successfully. Open ORI Snip from the Windows Start menu.')
     )) {
         $taskControls += ,@($taskRow[0], 'Heading', 'Text', 112, 20, 228, 58, 3, $null, ('{\Heading}' + $taskRow[1]), $null)
         $taskControls += ,@($taskRow[0], 'Details', 'Text', 20, 98, 320, 65, 3, $null, $taskRow[2], $null)
         $taskControls += ,@($taskRow[0], 'Close', 'PushButton', 265, 174, 75, 23, 3, $null, 'Close', 'Close')
     }
     foreach ($taskDialog in @('WelcomeDlg', 'ProgressDlg', 'FinishedDlg', 'CanceledDlg', 'FailedDlg', 'RemovedDlg', 'MaintenanceDlg')) {
-        $taskControls += ,@($taskDialog, 'Logo', 'Bitmap', 20, 20, 64, 64, 1, $null, 'TigerSnipLogo', $null)
+        $taskControls += ,@($taskDialog, 'Logo', 'Bitmap', 20, 20, 64, 64, 1, $null, 'ORISnipLogo', $null)
         $taskControls += ,@($taskDialog, 'Maintainer', 'Text', 20, 180, 150, 16, 3, $null, '{\Footer}Maintained by Jack Kempf', $null)
     }
     foreach ($taskRow in $taskControls) {
@@ -221,7 +221,7 @@ try {
         @('WelcomeDlg', 'Install', 'EndDialog', 'Return', '1', 1),
         @('WelcomeDlg', 'Cancel', 'EndDialog', 'Exit', '1', 1),
         @('ProgressDlg', 'Cancel', 'EndDialog', 'Exit', '1', 1),
-        @('FinishedDlg', 'Finish', 'DoAction', 'LaunchTigerSnip', 'LAUNCHAPP = "1" AND NOT Installed AND NOT (REMOVE ~= "ALL") AND UILevel = 5', 1),
+        @('FinishedDlg', 'Finish', 'DoAction', 'LaunchORISnip', 'LAUNCHAPP = "1" AND NOT Installed AND NOT (REMOVE ~= "ALL") AND UILevel = 5', 1),
         @('FinishedDlg', 'Finish', 'EndDialog', 'Return', '1', 2),
         @('FinishedDlg', 'Close', 'EndDialog', 'Return', '1', 1),
         @('CanceledDlg', 'Close', 'EndDialog', 'Return', '1', 1),
@@ -237,7 +237,7 @@ try {
     $taskLogoRecord = Invoke-MsiCom $taskInstaller 'CreateRecord' @(2)
     $taskLogoView = Invoke-MsiCom $taskDatabase 'OpenView' @('INSERT INTO `Binary` (`Name`, `Data`) VALUES (?, ?)')
     try {
-        Invoke-MsiCom $taskLogoRecord 'StringData' @(1, 'TigerSnipLogo') -Set
+        Invoke-MsiCom $taskLogoRecord 'StringData' @(1, 'ORISnipLogo') -Set
         $taskLogoPath = [string](Join-Path $taskRoot 'resources\app-icon.png')
         Invoke-MsiCom $taskLogoRecord 'SetStream' @(2, $taskLogoPath)
         Invoke-MsiCom $taskLogoView 'Execute' @($taskLogoRecord)
@@ -259,7 +259,7 @@ try {
     }
     $taskSummary = Invoke-MsiCom $taskDatabase 'SummaryInformation' @(20) -Get
     try {
-        foreach ($taskPair in @(@(1, 1252), @(2, 'Tiger Snip Setup'), @(3, 'Tiger Snip 1.0.2'),
+        foreach ($taskPair in @(@(1, 1252), @(2, 'ORI Snip Setup'), @(3, 'ORI Snip 1.0.2'),
             @(4, 'Jack Kempf'), @(7, 'x64;1033'), @(9, ('{' + [guid]::NewGuid().ToString().ToUpperInvariant() + '}')),
             @(14, 500), @(15, 10), @(18, 'Windows Installer'), @(19, 2))) {
             Invoke-MsiCom $taskSummary 'Property' $taskPair -Set
@@ -272,17 +272,17 @@ try {
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($taskInstaller)
 }
 Get-Item -LiteralPath $OutputPath | Select-Object FullName, Length
-$taskHashes = @('Tiger Snip 1.0.2 release information',
+$taskHashes = @('ORI Snip 1.0.2 release information',
     ('Packaged: ' + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'),
-    'Distribution file: Tiger Snip Setup.msi',
+    'Distribution file: ORI Snip Setup.msi',
     'Installation: current user; local app and Start menu shortcut; no automatic startup.',
-    'Interactive setup: success confirmation; Launch Tiger Snip checked by default on Finish.',
+    'Interactive setup: success confirmation; Launch ORI Snip checked by default on Finish.',
     'Silent/basic-UI setup, repair, and removal do not launch the app.',
     'Settings: current user LocalAppData; personal preferences are excluded from this package.',
     'Build: C++20, static runtime; package authored with Windows Installer and makecab.',
     ('Compiler: ' + $taskBuildRecord.compilerVersion[0]),
     ('Executable built: ' + $taskBuildRecord.builtAtUtc),
-    'Build record: Tiger Snip Build.json (compiler/tool hashes, options, source-input and EXE hashes).',
+    'Build record: ORI Snip Build.json (compiler/tool hashes, options, source-input and EXE hashes).',
     'Validated toolchain provenance: BUILD-TOOLCHAIN.md in the source repository.',
     'Signing: unsigned. IT deployment policy remains to be validated.')
 $taskHashes += 'Source base commit at build time: ' + $taskBuildRecord.sourceBaseCommit
@@ -297,11 +297,11 @@ $taskHashes += @('', 'Build input SHA256:')
 foreach ($taskInput in @('build.ps1', 'package.ps1', 'CMakeLists.txt', 'scripts\run-test.ps1', 'scripts\write-build-record.ps1') +
     @((Get-ChildItem -LiteralPath (Join-Path $taskRoot 'src') -File | Sort-Object Name |
         ForEach-Object { 'src\' + $_.Name })) + @('resources\app.rc',
-    'resources\app.manifest', 'resources\tiger-snip.ico', 'resources\app-icon.png', 'scripts\make-icon.ps1')) {
+    'resources\app.manifest', 'resources\ori-snip.ico', 'resources\app-icon.png', 'scripts\make-icon.ps1')) {
     $taskInputPath = Join-Path $taskRoot $taskInput
     if (Test-Path -LiteralPath $taskInputPath) {
         $taskHashes += (Get-FileHash -LiteralPath $taskInputPath -Algorithm SHA256).Hash + '  ' + $taskInput
     }
 }
-Set-Content -LiteralPath (Join-Path ([IO.Path]::GetDirectoryName($OutputPath)) 'Tiger Snip Release.txt') -Value $taskHashes -Encoding UTF8
+Set-Content -LiteralPath (Join-Path ([IO.Path]::GetDirectoryName($OutputPath)) 'ORI Snip Release.txt') -Value $taskHashes -Encoding UTF8
 Write-Output ('Installer SHA256: ' + (Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash)

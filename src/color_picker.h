@@ -11,7 +11,7 @@ std::optional<Color> pickPaletteColor(HINSTANCE instance, HWND owner, Color valu
                                       bool editing = false, void (*test)(HWND) = nullptr,
                                       const wchar_t *title = nullptr,
                                       const wchar_t *action = nullptr);
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
 LRESULT CALLBACK spectrumProcedure(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
 INT_PTR CALLBACK colorPickerProcedure(HWND, UINT, WPARAM, LPARAM);
 #endif

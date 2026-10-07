@@ -108,7 +108,7 @@ int wmain(int argc, wchar_t **argv)
         return 1;
     }
     const auto path = (std::filesystem::path(directory) / L"private screenshot.png").wstring();
-    const auto temporary = path + L".tiger-snip-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+    const auto temporary = path + L".ori-snip-" + std::to_wstring(GetCurrentProcessId()) + L".tmp";
     const auto backup = temporary + L".previous";
     HANDLE held = INVALID_HANDLE_VALUE;
     int result = 0;

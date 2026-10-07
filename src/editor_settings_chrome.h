@@ -4,8 +4,8 @@ bool settingsControlSelected(int id)
         return app.colorTheme == static_cast<unsigned>(id - ThemePurple);
     if (id >= SettingsPageFirst && id <= SettingsPageLast)
         return id - SettingsPageFirst == app.settingsPage;
-    if (id >= LogoStyleFirst && id < LogoStyleFirst + 6)
-        return app.exportOptions.samtecLogo && id - LogoStyleFirst == app.exportOptions.samtecStyle;
+    if (id >= LogoStyleFirst && id < LogoStyleFirst + 2)
+        return app.exportOptions.oriLogo && id - LogoStyleFirst == app.exportOptions.oriStyle;
     switch (id)
     {
     case InterfaceClassic:
@@ -28,8 +28,8 @@ bool settingsControlSelected(int id)
         return app.exportOptions.professionalBorder && app.exportOptions.professionalBlur;
     case ProfessionalRounded:
         return app.exportOptions.professionalBorder && app.exportOptions.professionalRounded;
-    case SamtecLogo:
-        return app.exportOptions.samtecLogo;
+    case ORILogo:
+        return app.exportOptions.oriLogo;
     case ToggleActions:
     case ToggleTools:
     case ToggleFormatting:
@@ -66,7 +66,7 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         brush, 1);
     text(L"Settings", {l.panel.left + 24, l.panel.top + 15, l.panel.right - 56, l.panel.top + 41},
          Ink);
-    text(L"Make Tiger Snip fit your workflow.",
+    text(L"Make ORI Snip fit your workflow.",
          {l.panel.left + 24, l.panel.top + 42, l.panel.right - 56, l.panel.top + 65}, Muted, true);
     fill({l.panel.left + 1, l.panel.top + 72, l.panel.right - 1, l.panel.top + 73}, uiBorder());
     fill({l.body.left - 16, l.panel.top + 73, l.body.left - 15, l.panel.bottom - 53}, uiBorder());
@@ -162,7 +162,7 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                 auto &pixels = app.settingsLogoPreviews[index];
                 if (pixels.empty())
                     pixels =
-                        app.graphics.samtecBadge(static_cast<uint8_t>(index), 28, app.darkTheme);
+                        app.graphics.oriBadge(static_cast<uint8_t>(index), 28, app.darkTheme);
                 auto premultiplied = pixels.pixels;
                 for (size_t i = 0; i < premultiplied.size(); i += 4)
                     for (int channel = 0; channel < 3; ++channel)

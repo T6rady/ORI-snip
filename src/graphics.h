@@ -55,17 +55,17 @@ Color textBackground(Color foreground);
 struct ExportOptions
 {
     bool professionalBorder = false;
-    bool samtecLogo = false;
-    uint8_t samtecStyle = 0;
+    bool oriLogo = false;
+    uint8_t oriStyle = 0;
     bool professionalBlur = true;
     bool professionalRounded = true;
     bool operator==(const ExportOptions &) const = default;
 };
 class Graphics
 {
-    std::array<Bitmap, 3> samtecLogos_;
-    const Bitmap &samtecLogo(int mark = 0);
-    void applySamtecLogo(Bitmap &image, uint8_t style);
+    std::array<Bitmap, 1> oriLogos_;
+    const Bitmap &oriLogo(int mark = 0);
+    void applyORILogo(Bitmap &image, uint8_t style);
 
   public:
     Com<ID2D1Factory> factory;
@@ -81,13 +81,13 @@ class Graphics
     Bitmap flatten(const Bitmap &image, const std::vector<Annotation> &items, int editingText = -1);
     Bitmap flattenRegion(const Bitmap &image, const std::vector<Annotation> &items, int editingText,
                          int x, int y, int width, int height);
-    Rect samtecLogoBounds(const Bitmap &image, uint8_t style);
+    Rect oriLogoBounds(const Bitmap &image, uint8_t style);
     // All export destinations use this pipeline; flatten remains the unstyled editing image.
     Bitmap exportImage(const Bitmap &image, const std::vector<Annotation> &items,
                        const ExportOptions &options = {}, int editingText = -1);
     std::vector<uint8_t> png(const Bitmap &bitmap);
     Bitmap decode(const std::vector<uint8_t> &bytes);
-    Bitmap samtecBadge(uint8_t style, int logoHeight = 48, bool lightWatermark = false);
+    Bitmap oriBadge(uint8_t style, int logoHeight = 48, bool lightWatermark = false);
     void test();
 };
 } // namespace snip

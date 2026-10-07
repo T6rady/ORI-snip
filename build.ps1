@@ -1,4 +1,4 @@
-param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'Tiger Snip.exe')
+param([string]$CompilerDirectory, [switch]$Test, [string]$OutputName = 'ORI Snip.exe')
 $ErrorActionPreference = 'Stop'
 if ($OutputName -notmatch '^[A-Za-z0-9][A-Za-z0-9._ -]*\.exe$') { throw 'OutputName must be an executable filename.' }
 $taskRoot = $PSScriptRoot
@@ -16,7 +16,7 @@ $taskSources = @('model', 'graphics', 'windows_support', 'settings', 'color_pick
 $taskBuild = Join-Path $taskRoot 'build'
 $taskDist = Join-Path $taskRoot 'dist'
 New-Item -ItemType Directory -Force -Path $taskBuild, $taskDist | Out-Null
-$taskIcon = Join-Path $taskRoot 'resources\tiger-snip.ico'
+$taskIcon = Join-Path $taskRoot 'resources\ori-snip.ico'
 if (-not (Test-Path -LiteralPath $taskIcon)) { & (Join-Path $taskRoot 'scripts\make-icon.ps1') }
 Push-Location (Join-Path $taskRoot 'resources')
 try {
@@ -44,7 +44,7 @@ if ($Test) {
     $taskAutoCopyArguments = @($taskAutoCopyArguments | Where-Object { $_ -ne '-mwindows' })
     & $taskCompiler @taskAutoCopyArguments
     if ($LASTEXITCODE -ne 0) { throw 'Auto copy test compilation failed.' }
-    $taskFileSaveArguments = @($taskClipboardArguments) + '-DTIGER_SNIP_TESTING'
+    $taskFileSaveArguments = @($taskClipboardArguments) + '-DORI_SNIP_TESTING'
     $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskRoot 'tests\clipboard.cpp'))] = Join-Path $taskRoot 'tests\file_save.cpp'
     $taskFileSaveArguments[$taskFileSaveArguments.IndexOf((Join-Path $taskBuild 'clipboard_test.exe'))] = Join-Path $taskBuild 'file_save_test.exe'
     & $taskCompiler @taskFileSaveArguments
@@ -54,7 +54,7 @@ if ($Test) {
     $taskSettingsArguments[$taskSettingsArguments.IndexOf((Join-Path $taskBuild 'autocopy_test.exe'))] = Join-Path $taskBuild 'settings_test.exe'
     & $taskCompiler @taskSettingsArguments
     if ($LASTEXITCODE -ne 0) { throw 'Settings test compilation failed.' }
-    $taskRobustnessArguments = @($taskSettingsArguments) + '-DTIGER_SNIP_TESTING'
+    $taskRobustnessArguments = @($taskSettingsArguments) + '-DORI_SNIP_TESTING'
     $taskRobustnessArguments[$taskRobustnessArguments.IndexOf((Join-Path $taskRoot 'tests\settings.cpp'))] = Join-Path $taskRoot 'tests\robustness.cpp'
     $taskRobustnessArguments[$taskRobustnessArguments.IndexOf((Join-Path $taskBuild 'settings_test.exe'))] = Join-Path $taskBuild 'robustness_test.exe'
     & $taskCompiler @taskRobustnessArguments

@@ -52,7 +52,7 @@ void check(HRESULT result, const char *operation)
 }
 void showError(HWND owner, const char *text) noexcept
 {
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     if (testing::errorSink)
     {
         testing::errorSink(text);
@@ -70,8 +70,8 @@ void showError(HWND owner, const char *text) noexcept
     showing = true;
     wchar_t message[2048]{};
     if (!MultiByteToWideChar(CP_UTF8, 0, text, -1, message, static_cast<int>(std::size(message))))
-        wcscpy_s(message, L"Tiger Snip encountered an error. Close the app and retry.");
-    MessageBoxW(owner, message, L"Tiger Snip", MB_OK | MB_ICONERROR);
+        wcscpy_s(message, L"ORI Snip encountered an error. Close the app and retry.");
+    MessageBoxW(owner, message, L"ORI Snip", MB_OK | MB_ICONERROR);
     showing = false;
 }
 std::wstring executablePath()
@@ -131,7 +131,7 @@ std::optional<std::wstring> boundedRegistryString(DWORD type, const wchar_t *val
 }
 bool startupEnabled(const std::wstring &executable)
 {
-    const auto value = readRegistryString(HKEY_CURRENT_USER, RunKey, L"TigerSnip");
+    const auto value = readRegistryString(HKEY_CURRENT_USER, RunKey, L"ORISnip");
     return value && *value == L"\"" + executable + L"\" --tray";
 }
 void setStartupEnabled(const std::wstring &executable, bool enabled)
@@ -142,10 +142,10 @@ void setStartupEnabled(const std::wstring &executable, bool enabled)
                                   &key.value, nullptr);
     if (result != ERROR_SUCCESS)
         throwWindowsError("Cannot change the startup setting.", result);
-    result = enabled ? RegSetValueExW(key.value, L"TigerSnip", 0, REG_SZ,
+    result = enabled ? RegSetValueExW(key.value, L"ORISnip", 0, REG_SZ,
                                       reinterpret_cast<const BYTE *>(command.c_str()),
                                       static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)))
-                     : RegDeleteValueW(key.value, L"TigerSnip");
+                     : RegDeleteValueW(key.value, L"ORISnip");
     if (result != ERROR_SUCCESS && !(result == ERROR_FILE_NOT_FOUND && !enabled))
         throwWindowsError("Cannot update the startup setting.", result);
 }
@@ -173,14 +173,14 @@ void forwardExistingLaunch(const wchar_t *windowClass, UINT message, WPARAM requ
                     return;
                 const DWORD failure = GetLastError();
                 if (failure != ERROR_INVALID_WINDOW_HANDLE)
-                    throwWindowsError("Windows could not open the running Tiger Snip window.",
+                    throwWindowsError("Windows could not open the running ORI Snip window.",
                                       failure);
             }
         }
         const ULONGLONG now = GetTickCount64();
         if (now >= deadline)
             throwWindowsError(
-                "Tiger Snip is still starting or could not start. Wait a moment and try again.",
+                "ORI Snip is still starting or could not start. Wait a moment and try again.",
                 ERROR_TIMEOUT);
         Sleep(static_cast<DWORD>(std::min<ULONGLONG>(20, deadline - now)));
     }

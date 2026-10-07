@@ -54,7 +54,7 @@ void saveBytes(const std::wstring &path, const std::vector<uint8_t> &bytes)
     wchar_t id[40]{};
     if (!StringFromGUID2(unique, id, static_cast<int>(std::size(id))))
         throwWindowsError("Cannot identify this save attempt.", ERROR_GEN_FAILURE);
-    const std::wstring temporary = path + L".tiger-snip-" + id + L".tmp";
+    const std::wstring temporary = path + L".ori-snip-" + id + L".tmp";
     const std::wstring backup = temporary + L".previous";
     HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, replacing ? &access : nullptr,
                               CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -73,7 +73,7 @@ void saveBytes(const std::wstring &path, const std::vector<uint8_t> &bytes)
         throwWindowsError("Could not write the file. The original file was preserved.",
                           writeFailure);
     }
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     if (testing::fileSaveCheckpoint)
         testing::fileSaveCheckpoint(temporary.c_str(), backup.c_str());
 #endif

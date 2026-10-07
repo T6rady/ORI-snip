@@ -1,6 +1,6 @@
-# Tiger Snip
+# ORI Snip
 
-Tiger Snip is a local Windows screenshot and annotation tool. Capture an area or the full desktop, add text and drawings, then copy the image or save it as a PNG.
+ORI Snip is a local Windows screenshot and annotation tool. Capture an area or the full desktop, add text and drawings, then copy the image or save it as a PNG.
 
 ## Features
 
@@ -9,16 +9,16 @@ Tiger Snip is a local Windows screenshot and annotation tool. Capture an area or
 - Top toolbars or side panels, with Purple, Blue, Teal or a custom UI color.
 - Light or Dark appearance in either layout.
 - Stroke presets plus an adjustable pixel slider, and per-annotation opacity.
-- Optional borders, Samtec logos, and capture shortcuts.
+- Optional borders, ORI logos, and capture shortcuts.
 
 ## Installation
 
-Open **dist/Tiger Snip Setup.msi** and click **Install**. When setup confirms success, click **Finish** to launch Tiger Snip (or uncheck **Launch Tiger Snip**). You can also open it from the Start menu. Each user gets a local installation. For shared-drive distribution, place the MSI in the shared folder.
+Open **dist/ORI Snip Setup.msi** and click **Install**. When setup confirms success, click **Finish** to launch ORI Snip (or uncheck **Launch ORI Snip**). You can also open it from the Start menu. Each user gets a local installation. For shared-drive distribution, place the MSI in the shared folder.
 
-The standalone **dist/Tiger Snip.exe** can also run directly.
+The standalone **dist/ORI Snip.exe** can also run directly.
 
 Fresh installations start with the new **Side panels** UI and the Purple light theme.
-Existing users keep their saved layout and colors.
+Layout and colors are saved in your personal ORI Snip settings.
 Saved selections of the retired Orange preset switch to Purple; saved custom colors are retained.
 
 ## Use
@@ -51,7 +51,7 @@ or **Teal**, then **Light** or **Dark**; both choices work with either layout an
 the editor. **Custom color** opens the color spectrum with RGB and hex input for your own UI
 accent. Apply saves it; Cancel keeps the previous theme. Accent shades adjust for readable controls
 in Light and Dark, while the chosen color is remembered when you switch presets.
-Capture shortcuts, auto copy, rendering, all border options and all six logo styles
+Capture shortcuts, auto copy, rendering, all border options and both ORI logo styles
 remain available. The capture button's chevron
 also offers an instant capture of all monitors. Zoom and Fit are in the bottom bar.
 In Side panels, clicking the bottom-right Fit / 100% control switches between fitting

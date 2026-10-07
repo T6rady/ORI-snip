@@ -111,7 +111,7 @@ SettingsPanelLayout settingsPanelLayout()
         row(SettingsRenderer, SettingsControlKind::Toggle, L"Software rendering",
             L"Compatibility mode for smoother updates on some PCs.");
         row(Startup, SettingsControlKind::Toggle, L"Run at sign-in",
-            L"Keep Tiger Snip ready in the tray.");
+            L"Keep ORI Snip ready in the tray.");
         row(SaveLocation, SettingsControlKind::Button, L"Save location",
             app.saveFolder.empty() ? L"Default location \u00B7 Click to choose a folder"
                                    : app.saveFolder,
@@ -156,11 +156,11 @@ SettingsPanelLayout settingsPanelLayout()
         borderOption(ProfessionalRounded, L"Rounded corners", L"Keeps screenshot content unchanged.");
         l.controls[borderGroup].rect.bottom = y;
         y += 12;
-        row(SamtecLogo, SettingsControlKind::Toggle, L"Samtec logo",
+        row(ORILogo, SettingsControlKind::Toggle, L"ORI logo",
             L"Choose a badge or subtle watermark below.");
         heading(L"Logo style");
         const float half = (l.body.width() - 10) / 2;
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; i < 2; ++i)
         {
             const float left = l.body.left + (i % 2) * (half + 10), top = y + (i / 2) * 104;
             l.controls.push_back({{left, top, left + half, top + 94},
@@ -168,7 +168,7 @@ SettingsPanelLayout settingsPanelLayout()
                                   SettingsControlKind::Logo,
                                   LogoStyleNames[i], L""});
         }
-        y += 322;
+        y += 114;
         break;
     }
     case 4:
@@ -200,11 +200,11 @@ SettingsPanelLayout settingsPanelLayout()
                   {Clear, L"Clear annotations"},
                   {CropTool, L"Crop image"},
                   {EraserTool, L"Eraser"},
-                  {Exit, L"Exit Tiger Snip"}}})
+                  {Exit, L"Exit ORI Snip"}}})
             row(id, SettingsControlKind::Button, label, L"", 42);
         break;
     default:
-        row(0, SettingsControlKind::Heading, L"Tiger Snip 1.0.2", L"", 36);
+        row(0, SettingsControlKind::Heading, L"ORI Snip 1.0.2", L"", 36);
         row(0, SettingsControlKind::Text, L"Capture. Annotate. Share.", L"Developed by Jack Kempf",
             72);
         row(0, SettingsControlKind::Text, L"Useful shortcuts",
@@ -214,7 +214,7 @@ SettingsPanelLayout settingsPanelLayout()
             230);
         row(0, SettingsControlKind::Text, L"Choose tools from the toolbar.",
             L"Plain letter keys do not activate tools.", 64);
-        row(0, SettingsControlKind::Text, L"Close the window to keep Tiger Snip in the tray.",
+        row(0, SettingsControlKind::Text, L"Close the window to keep ORI Snip in the tray.",
             L"Actions \u2192 Exit quits the app.", 64);
         break;
     }

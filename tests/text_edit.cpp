@@ -18,7 +18,7 @@ int wmain()
         };
         station = CreateWindowStationW(nullptr, 0, WINSTA_ALL_ACCESS, nullptr);
         require(station && SetProcessWindowStation(station), "Cannot isolate clipboard.");
-        desktop = CreateDesktopW(L"TigerSnipTextTest", nullptr, nullptr, 0,
+        desktop = CreateDesktopW(L"ORISnipTextTest", nullptr, nullptr, 0,
                                  DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS |
                                      DESKTOP_WRITEOBJECTS,
                                  nullptr);

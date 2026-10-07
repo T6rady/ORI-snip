@@ -55,7 +55,7 @@ int wmain()
 {
     const auto root = createTestDirectory(std::filesystem::current_path() / L"robustness-output");
     const auto path = root / L"preferences.ini";
-    const auto registryPath = L"Software\\Tiger Snip Tests\\" + root.filename().wstring();
+    const auto registryPath = L"Software\\ORI Snip Tests\\" + root.filename().wstring();
     HKEY key = nullptr;
     int result = 0;
     try
@@ -103,7 +103,7 @@ int wmain()
                     "Cannot write registry fixture.");
             return readRegistryString(HKEY_CURRENT_USER, registryPath.c_str(), L"test");
         };
-        const wchar_t good[] = L"\"C:\\Tiger Snip.exe\" --tray";
+        const wchar_t good[] = L"\"C:\\ORI Snip.exe\" --tray";
         require(registry(REG_SZ, good, sizeof(good)) == good, "Valid startup string rejected.");
         require(!registry(REG_BINARY, good, sizeof(good)), "Wrong registry type accepted.");
         // Windows may normalize strings when storing them; exercise the raw parser too.

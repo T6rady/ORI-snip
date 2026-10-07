@@ -46,5 +46,5 @@ $taskRecord = [ordered]@{
     output = [ordered]@{ name = $OutputName; sha256 = (Get-FileHash -LiteralPath $taskExe -Algorithm SHA256).Hash }
     inputs = $taskHashes
 }
-$taskRecordName = if ($OutputName -eq 'Tiger Snip.exe') { 'Tiger Snip Build.json' } else { $OutputName + '.build.json' }
+$taskRecordName = if ($OutputName -eq 'ORI Snip.exe') { 'ORI Snip Build.json' } else { $OutputName + '.build.json' }
 $taskRecord | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskRoot ('dist\' + $taskRecordName)) -Encoding UTF8

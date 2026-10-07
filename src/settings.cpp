@@ -131,9 +131,9 @@ void commitPreferences(const std::wstring &path, const std::vector<Setting> &cha
     wchar_t id[40]{};
     StringFromGUID2(unique, id, static_cast<int>(std::size(id)));
     StagedSettings staged{destination.parent_path() /
-                          (std::wstring(L".tiger-snip-settings-") + id + L".ini")};
+                          (std::wstring(L".ori-snip-settings-") + id + L".ini")};
     saveBytes(staged.path.wstring(), unicodeIni(original));
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     unsigned checkpoint = 0;
 #endif
     for (const auto &change : changes)
@@ -141,7 +141,7 @@ void commitPreferences(const std::wstring &path, const std::vector<Setting> &cha
         if (!WritePrivateProfileStringW(change.section.c_str(), change.key.c_str(),
                                         change.value.c_str(), staged.path.c_str()))
             throwWindowsError("Cannot stage the preference change.");
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
         if (testing::settingsCheckpoint)
             testing::settingsCheckpoint(++checkpoint);
 #endif
@@ -158,7 +158,7 @@ void commitPreferences(const std::wstring &path, const std::vector<Setting> &cha
         if (!WritePrivateProfileSectionW(section.name.c_str(), entries.c_str(),
                                          staged.path.c_str()))
             throwWindowsError("Cannot stage the preference section.");
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
         if (testing::settingsCheckpoint)
             testing::settingsCheckpoint(++checkpoint);
 #endif
@@ -171,12 +171,12 @@ void commitPreferences(const std::wstring &path, const std::vector<Setting> &cha
 std::wstring settingsPathForProfile(const std::filesystem::path &localData,
                                     const std::filesystem::path &portable)
 {
-    const auto directory = localData / L"Tiger Snip";
+    const auto directory = localData / L"ORI Snip";
     std::error_code failure;
     std::filesystem::create_directories(directory, failure);
     if (failure)
-        throw std::runtime_error("Cannot create your personal Tiger Snip settings folder.");
-    const auto destination = directory / L"TigerSnip.ini";
+        throw std::runtime_error("Cannot create your personal ORI Snip settings folder.");
+    const auto destination = directory / L"ORISnip.ini";
     if (!std::filesystem::exists(destination))
     {
         // Import a portable user's own preferences once. Setup never distributes an INI.
@@ -193,7 +193,7 @@ std::wstring settingsPathForProfile(const std::filesystem::path &localData,
                     throw std::runtime_error("Cannot make migrated personal preferences writable.");
             }
             else if (GetLastError() != ERROR_FILE_EXISTS)
-                throw std::runtime_error("Cannot migrate your existing Tiger Snip preferences.");
+                throw std::runtime_error("Cannot migrate your existing ORI Snip preferences.");
         }
     }
     return destination.wstring();
@@ -206,7 +206,7 @@ std::wstring personalSettingsPath()
     const std::filesystem::path localData(folder);
     CoTaskMemFree(folder);
     return settingsPathForProfile(localData, std::filesystem::path(executablePath()).parent_path() /
-                                                 L"TigerSnip.ini");
+                                                 L"ORISnip.ini");
 }
 
 } // namespace snip

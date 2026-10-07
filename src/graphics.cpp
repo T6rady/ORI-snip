@@ -20,7 +20,7 @@ void Graphics::initialize()
     Graphics ready;
     check(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, ready.factory.put()),
           "Cannot initialize Direct2D.");
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     if (testing::graphicsCheckpoint)
         testing::graphicsCheckpoint(1);
 #endif
@@ -47,7 +47,7 @@ void Graphics::initialize()
     makeFont(ready.smallFont, 12, DWRITE_FONT_WEIGHT_NORMAL);
     makeFont(ready.titleFont, 28, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     makeFont(ready.labelFont, 10, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     if (testing::graphicsCheckpoint)
         testing::graphicsCheckpoint(2);
 #endif
@@ -64,7 +64,7 @@ void Graphics::initialize()
     dashed.dashStyle = D2D1_DASH_STYLE_DOT;
     check(ready.factory->CreateStrokeStyle(dashed, nullptr, 0, ready.dotStroke.put()),
           "Cannot initialize dotted strokes.");
-#ifdef TIGER_SNIP_TESTING
+#ifdef ORI_SNIP_TESTING
     if (testing::graphicsCheckpoint)
         testing::graphicsCheckpoint(3);
 #endif
@@ -386,9 +386,9 @@ Bitmap Graphics::flattenRegion(const Bitmap &image, const std::vector<Annotation
         item.move({-float(x), -float(y)});
     return flatten(image.crop(x, y, width, height), shifted, editingText);
 }
-const Bitmap &Graphics::samtecLogo(int mark)
+const Bitmap &Graphics::oriLogo(int mark)
 {
-    auto &cached = samtecLogos_.at(mark);
+    auto &cached = oriLogos_.at(mark);
     if (!cached.empty())
         return cached;
     const HMODULE module = GetModuleHandleW(nullptr);
@@ -397,7 +397,7 @@ const Bitmap &Graphics::samtecLogo(int mark)
     const HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
     const auto bytes = memory ? static_cast<const uint8_t *>(LockResource(memory)) : nullptr;
     if (!bytes || !size)
-        throw std::runtime_error("Cannot load the embedded Samtec logo.");
+        throw std::runtime_error("Cannot load the embedded ORI logo.");
     const auto decoded = decode(std::vector<uint8_t>(bytes, bytes + size));
     // Ignore transparent margins in the master asset when determining watermark size.
     int left = decoded.width, top = decoded.height, right = 0, bottom = 0;
@@ -411,7 +411,7 @@ const Bitmap &Graphics::samtecLogo(int mark)
                 bottom = std::max(bottom, y + 1);
             }
     if (left >= right || top >= bottom)
-        throw std::runtime_error("The Samtec logo asset is empty.");
+        throw std::runtime_error("The ORI logo asset is empty.");
     cached = decoded.crop(left, top, right - left, bottom - top);
     return cached;
 }
@@ -443,15 +443,15 @@ static Bitmap resizedTransparent(const Bitmap &image, int width, int height)
                                       image.width * 4,
                                       static_cast<UINT>(premultiplied.pixels.size()),
                                       premultiplied.pixels.data(), source.put()),
-          "Cannot read Samtec logo pixels.");
+          "Cannot read ORI logo pixels.");
     Com<IWICBitmapScaler> scaler;
-    check(wic->CreateBitmapScaler(scaler.put()), "Cannot scale Samtec logo.");
+    check(wic->CreateBitmapScaler(scaler.put()), "Cannot scale ORI logo.");
     check(scaler->Initialize(source.get(), width, height, WICBitmapInterpolationModeFant),
-          "Cannot resize Samtec logo.");
+          "Cannot resize ORI logo.");
     auto scaled = Bitmap::create(width, height);
     check(scaler->CopyPixels(nullptr, width * 4, static_cast<UINT>(scaled.pixels.size()),
                              scaled.pixels.data()),
-          "Cannot render Samtec logo.");
+          "Cannot render ORI logo.");
     for (size_t i = 0; i < scaled.pixels.size(); i += 4)
         for (int c = 0; c < 3; ++c)
             scaled.pixels[i + c] =
@@ -462,12 +462,12 @@ static Bitmap resizedTransparent(const Bitmap &image, int width, int height)
                     : 0;
     return scaled;
 }
-Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
+Bitmap Graphics::oriBadge(uint8_t style, int logoHeight, bool lightWatermark)
 {
-    style = style < 6 ? style : 0;
-    const int mark = style / 2;
+    style = style < 2 ? style : 0;
+    const int mark = 0;
     const bool soft = style % 2;
-    const auto &logo = samtecLogo(mark);
+    const auto &logo = oriLogo(mark);
     const int height = std::clamp(logoHeight, 1, 128);
     const int width =
         std::max(1, static_cast<int>(std::lround(height * double(logo.width) / logo.height)));
@@ -504,7 +504,7 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
     }
     const int padding = std::max(2, static_cast<int>(std::lround(height * .18)));
     const int halo = 6;
-    const int cardWidth = (mark == 0 ? height : width) + padding * 2;
+    const int cardWidth = width + padding * 2;
     const int cardHeight = height + padding * 2;
     const double radius = std::min(7.0, cardHeight * .15);
     auto badge = Bitmap::create(cardWidth + halo * 2, cardHeight + halo * 2);
@@ -522,7 +522,7 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
             const double shadow = .12 * std::exp(-outside * outside / (2 * sigma * sigma));
             compositePixel(badge, x, y, rgb(85, 90, 105), shadow);
             const double coverage = std::clamp(.5 - d, 0.0, 1.0);
-            compositePixel(badge, x, y, rgb(255, 255, 255), coverage * .98);
+            compositePixel(badge, x, y, rgb(28, 34, 44), coverage * .98);
             const double border = coverage * std::clamp(d + 1.5, 0.0, 1.0) * .22;
             compositePixel(badge, x, y, rgb(128, 128, 128), border);
         }
@@ -537,16 +537,16 @@ Bitmap Graphics::samtecBadge(uint8_t style, int logoHeight, bool lightWatermark)
         }
     return badge;
 }
-Rect Graphics::samtecLogoBounds(const Bitmap &image, uint8_t style)
+Rect Graphics::oriLogoBounds(const Bitmap &image, uint8_t style)
 {
-    style = style < 6 ? style : 0;
+    style = style < 2 ? style : 0;
     const int side = std::min(image.width, image.height);
     const int margin =
         std::min(std::max(1, static_cast<int>(std::lround(side * .025))), (side - 1) / 2);
-    auto master = samtecBadge(style);
-    constexpr double fractions[] = {.09, .075, .085, .07, .055, .05};
-    constexpr int minHeights[] = {32, 26, 32, 26, 22, 20};
-    constexpr int maxHeights[] = {80, 64, 80, 64, 52, 44};
+    auto master = oriBadge(style);
+    constexpr double fractions[] = {.09, .075};
+    constexpr int minHeights[] = {32, 26};
+    constexpr int maxHeights[] = {80, 64};
     const int desiredHeight =
         std::clamp(static_cast<int>(std::lround(side * fractions[style])), minHeights[style],
                    maxHeights[style]);
@@ -563,13 +563,13 @@ Rect Graphics::samtecLogoBounds(const Bitmap &image, uint8_t style)
     const int left = image.width - margin - width, top = image.height - margin - height;
     return {float(left), float(top), float(left + width), float(top + height)};
 }
-void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
+void Graphics::applyORILogo(Bitmap &image, uint8_t style)
 {
-    style = style < 6 ? style : 0;
-    const auto bounds = samtecLogoBounds(image, style);
+    style = style < 2 ? style : 0;
+    const auto bounds = oriLogoBounds(image, style);
     const int left = static_cast<int>(bounds.left), top = static_cast<int>(bounds.top);
     const int width = static_cast<int>(bounds.width()), height = static_cast<int>(bounds.height());
-    auto master = samtecBadge(style);
+    auto master = oriBadge(style);
     const bool soft = style % 2;
     if (soft)
     {
@@ -588,7 +588,7 @@ void Graphics::applySamtecLogo(Bitmap &image, uint8_t style)
                 ++samples;
             }
         if (luminance / samples < 128)
-            master = samtecBadge(style, 48, true);
+            master = oriBadge(style, 48, true);
     }
     const auto badge = resizedTransparent(master, width, height);
     for (int y = 0; y < height; ++y)
@@ -604,8 +604,8 @@ Bitmap Graphics::exportImage(const Bitmap &image, const std::vector<Annotation> 
                              const ExportOptions &options, int editingText)
 {
     auto content = flatten(image, items, editingText);
-    if (options.samtecLogo)
-        applySamtecLogo(content, options.samtecStyle);
+    if (options.oriLogo)
+        applyORILogo(content, options.oriStyle);
     if (!options.professionalBorder || (!options.professionalBlur && !options.professionalRounded))
         return content;
 
@@ -1168,20 +1168,21 @@ void Graphics::test()
     const auto darkPlain = exportImage(darkSource, darkItems);
     const auto darkBordered = exportImage(darkSource, darkItems, {true});
     makeBorderPreview(darkPlain, darkBordered, L"professional-border-dark-preview.png");
-    const auto &logo = samtecLogo();
-    auto logoPixel = [&](double x, double y) {
-        return &logo.pixels[(static_cast<size_t>(y * (logo.height - 1)) * logo.width +
-                             static_cast<int>(x * (logo.width - 1))) *
-                            4];
-    };
-    const auto bar = logoPixel(.5, .07), orange = logoPixel(.5, .52);
-    if (logo.height < logo.width * 1.4 || logo.height > logo.width * 1.8 ||
-        logoPixel(.75, .385)[3] > 5 || logoPixel(.25, .59)[3] > 5 || bar[3] < 240 || bar[0] > 10 ||
-        bar[1] > 10 || bar[2] > 10 || orange[3] < 240 || orange[2] < 220 || orange[1] < 60 ||
-        orange[1] > 150 || orange[0] > 65)
-        throw std::runtime_error(
-            "Samtec logo lost its transparent cutouts, black bars, orange fill, or proportions.");
-    saveBytes(L"samtec-logo-transparent.png", png(logo));
+    const auto &logo = oriLogo();
+    size_t visibleLogoPixels = 0, transparentLogoPixels = 0;
+    for (size_t i = 0; i < logo.pixels.size(); i += 4)
+    {
+        transparentLogoPixels += logo.pixels[i + 3] == 0;
+        if (logo.pixels[i + 3] >= 8)
+        {
+            ++visibleLogoPixels;
+            if (logo.pixels[i] < 240 || logo.pixels[i + 1] < 240 || logo.pixels[i + 2] < 240)
+                throw std::runtime_error("The supplied white ORI artwork changed color.");
+        }
+    }
+    if (visibleLogoPixels < 100 || transparentLogoPixels < 100 || logo.width <= logo.height)
+        throw std::runtime_error("ORI logo lost its artwork, transparency, or proportions.");
+    saveBytes(L"ori-logo-transparent.png", png(logo));
     size_t previousChanged = 0;
     for (int side : {40, 160, 640})
     {
@@ -1200,20 +1201,20 @@ void Graphics::test()
                     if (x < side * .60 || y < side * .65 || x == side - 1 || y == side - 1 ||
                         branded.pixels[i + 3] != 255 || branded.pixels[i + 2] < 8)
                         throw std::runtime_error(
-                            "Samtec watermark was misplaced, opaque, or changed image alpha.");
+                            "ORI watermark was misplaced, opaque, or changed image alpha.");
                 }
             }
         if (branded.width != side || branded.height != side || changed <= previousChanged ||
             disabledLogo.pixels != screenshot.pixels ||
             decode(png(branded)).pixels != branded.pixels)
             throw std::runtime_error(
-                "Samtec watermark default, scaling, dimensions, or PNG round trip failed.");
+                "ORI watermark default, scaling, dimensions, or PNG round trip failed.");
         previousChanged = changed;
     }
     auto transparentSource = Bitmap::create(640, 320);
     const auto transparentLogo = exportImage(transparentSource, {}, {false, true});
     if (transparentLogo.pixels[3] || decode(png(transparentLogo)).pixels != transparentLogo.pixels)
-        throw std::runtime_error("Samtec watermark did not preserve transparent image pixels.");
+        throw std::runtime_error("ORI watermark did not preserve transparent image pixels.");
     const auto brandedLight = exportImage(textSource, borderItems, {false, true});
     const auto borderedLight = exportImage(textSource, borderItems, {true, true});
     const auto brandedDark = exportImage(darkSource, darkItems, {false, true});
@@ -1221,10 +1222,10 @@ void Graphics::test()
     if (brandedDark.pixels == darkPlain.pixels ||
         decode(png(borderedDark)).pixels != borderedDark.pixels)
         throw std::runtime_error(
-            "Samtec Logo did not work on dark screenshots with Professional Border.");
-    makeBorderPreview(brandedLight, borderedLight, L"samtec-logo-light-preview.png");
-    makeBorderPreview(brandedDark, borderedDark, L"samtec-logo-dark-preview.png");
-    saveBytes(L"samtec-logo-snippet.png", png(borderedLight));
+            "ORI Logo did not work on dark screenshots with Professional Border.");
+    makeBorderPreview(brandedLight, borderedLight, L"ori-logo-light-preview.png");
+    makeBorderPreview(brandedDark, borderedDark, L"ori-logo-dark-preview.png");
+    saveBytes(L"ori-logo-snippet.png", png(borderedLight));
     for (const auto &size : {std::pair{1, 1}, std::pair{3, 24}, std::pair{24, 3}})
     {
         auto tiny = Bitmap::create(size.first, size.second);
@@ -1232,34 +1233,21 @@ void Graphics::test()
         const auto exported = exportImage(tiny, {}, {true, true});
         if (exported.width != tiny.width + 40 || exported.height != tiny.height + 40 ||
             decode(png(exported)).pixels != exported.pixels)
-            throw std::runtime_error("Samtec Logo failed on a narrow or one-pixel snip.");
+            throw std::runtime_error("ORI Logo failed on a narrow or one-pixel snip.");
     }
-    for (int mark : {1, 2})
-    {
-        const auto &asset = samtecLogo(mark);
-        size_t transparent = 0;
-        for (size_t i = 3; i < asset.pixels.size(); i += 4)
-            transparent += asset.pixels[i] <= 5;
-        if (transparent < static_cast<size_t>(asset.width * asset.height) / 10 ||
-            asset.width <= asset.height)
-            throw std::runtime_error(
-                "Tiger or wordmark lost its transparent cutouts or proportions.");
-        saveBytes(mark == 1 ? L"samtec-tiger-transparent.png" : L"samtec-wordmark-transparent.png",
-                  png(asset));
-    }
-    for (uint8_t style = 0; style < 6; ++style)
+    for (uint8_t style = 0; style < 2; ++style)
     {
         for (auto size : {std::pair{266, 111}, std::pair{160, 80}, std::pair{40, 40},
                           std::pair{24, 240}, std::pair{240, 24}, std::pair{1, 1}})
         {
             const auto source = Bitmap::create(size.first, size.second);
-            const auto bounds = samtecLogoBounds(source, style);
+            const auto bounds = oriLogoBounds(source, style);
             if (bounds.left < 0 || bounds.top < 0 || bounds.right > source.width ||
                 bounds.bottom > source.height || bounds.width() > source.width * .35f + 1 ||
                 bounds.height() > source.height * .30f + 1)
                 throw std::runtime_error("A small-snippet logo covers too much content or escapes the image.");
             if (size.first == 266 && size.second == 111 &&
-                bounds.height() < (style < 4 ? (style % 2 ? 24 : 30) : 18))
+                bounds.height() < (style % 2 ? 24 : 30))
                 throw std::runtime_error("A small-snippet logo shrank below recognizable size.");
         }
         for (bool dark : {false, true})
@@ -1288,25 +1276,23 @@ void Graphics::test()
             if (recognizablePixels < 40 || branded.width != source.width ||
                 branded.height != source.height || decode(png(branded)).pixels != branded.pixels)
                 throw std::runtime_error("A small-snippet logo is unreadable or changed export dimensions.");
-            saveBytes(L"samtec-small-style-" + std::to_wstring(style + 1) +
+            saveBytes(L"ori-small-style-" + std::to_wstring(style + 1) +
                           (dark ? L"-dark.png" : L"-light.png"),
                       png(exportImage(source, {text}, {true, true, style})));
         }
     }
-    auto stylesPreview = Bitmap::create(1680, 1920);
+    auto stylesPreview = Bitmap::create(1680, 640);
     std::fill(stylesPreview.pixels.begin(), stylesPreview.pixels.end(), 255);
     std::vector<Annotation> previewLabels;
-    const wchar_t *names[] = {L"S - White badge",        L"S - Soft watermark",
-                              L"Tiger - White badge",    L"Tiger - Soft watermark",
-                              L"Wordmark - White badge", L"Wordmark - Soft watermark"};
-    for (uint8_t style = 0; style < 6; ++style)
+    const wchar_t *names[] = {L"ORI - Dark badge", L"ORI - Soft watermark"};
+    for (uint8_t style = 0; style < 2; ++style)
     {
-        const auto badge = samtecBadge(style);
+        const auto badge = oriBadge(style);
         if (badge.pixels[3] > 8 || badge.width <= 0 || badge.height <= 0)
             throw std::runtime_error("Logo badge lacks transparent padding for its halo.");
         if (style % 2)
         {
-            const auto light = samtecBadge(style, 48, true);
+            const auto light = oriBadge(style, 48, true);
             size_t visible = 0, transparent = 0;
             for (size_t i = 0; i < badge.pixels.size(); i += 4)
             {
@@ -1321,15 +1307,15 @@ void Graphics::test()
                         "Soft watermark must be faint, neutral, and free of orange accents.");
             }
             if (visible < 30 || transparent < badge.pixels.size() / 64 ||
-                badge.width >= samtecBadge(style - 1).width ||
-                badge.height >= samtecBadge(style - 1).height)
+                badge.width >= oriBadge(style - 1).width ||
+                badge.height >= oriBadge(style - 1).height)
                 throw std::runtime_error("Soft watermark lacks visible artwork, transparent "
                                          "cutouts, or a compact size: " +
                                          std::to_string(style) + ", visible " +
                                          std::to_string(visible) + ", transparent " +
                                          std::to_string(transparent));
         }
-        saveBytes(L"samtec-style-" + std::to_wstring(style + 1) + L".png", png(badge));
+        saveBytes(L"ori-style-" + std::to_wstring(style + 1) + L".png", png(badge));
         for (int background = 0; background < 3; ++background)
         {
             auto source = Bitmap::create(520, 240);
@@ -1370,7 +1356,7 @@ void Graphics::test()
                 decode(png(bordered)).pixels != bordered.pixels ||
                 exportImage(source, text, {false, false, style}).pixels != plain.pixels)
                 throw std::runtime_error(
-                    "A Samtec style failed export, border, disabled, or PNG consistency.");
+                    "A ORI style failed export, border, disabled, or PNG consistency.");
             if (style % 2 && background < 2)
             {
                 int greatestContrast = 0;
@@ -1394,7 +1380,7 @@ void Graphics::test()
                         (x < source.width * .65 || y < source.height * .78 ||
                          rendered.pixels[i + 3] != 255))
                         throw std::runtime_error(
-                            "Samtec badge changed pixels outside its bottom-right area.");
+                            "ORI badge changed pixels outside its bottom-right area.");
                 }
             const int left = background * 560 + 20, top = style * 320 + 60;
             for (int y = 0; y < bordered.height; ++y)
@@ -1421,10 +1407,10 @@ void Graphics::test()
             const auto source = Bitmap::create(size.first, size.second);
             const auto tiny = exportImage(source, {}, {true, true, style});
             if (decode(png(tiny)).pixels != tiny.pixels)
-                throw std::runtime_error("A Samtec style failed on a tiny transparent snip.");
+                throw std::runtime_error("A ORI style failed on a tiny transparent snip.");
         }
     }
-    saveBytes(L"samtec-styles-preview.png", png(flatten(stylesPreview, previewLabels)));
+    saveBytes(L"ori-styles-preview.png", png(flatten(stylesPreview, previewLabels)));
     auto preview = Bitmap::create(1600, 360);
     std::fill(preview.pixels.begin(), preview.pixels.end(), 255);
     std::vector<Annotation> samples;

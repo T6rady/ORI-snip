@@ -8,9 +8,9 @@ int wmain()
         (L"settings-test-" + std::to_wstring(GetCurrentProcessId()));
     const auto portable = root / L"portable.ini";
     const auto missing = root / L"missing.ini";
-    const auto first = root / L"first" / L"Tiger Snip" / L"TigerSnip.ini";
-    const auto second = root / L"second" / L"Tiger Snip" / L"TigerSnip.ini";
-    const auto third = root / L"third" / L"Tiger Snip" / L"TigerSnip.ini";
+    const auto first = root / L"first" / L"ORI Snip" / L"ORISnip.ini";
+    const auto second = root / L"second" / L"ORI Snip" / L"ORISnip.ini";
+    const auto third = root / L"third" / L"ORI Snip" / L"ORISnip.ini";
     auto require = [](bool ok, const char *message) {
         if (!ok) throw std::runtime_error(std::string(message) +
                                          (app.preferenceError.empty() ? "" : " " + app.preferenceError));

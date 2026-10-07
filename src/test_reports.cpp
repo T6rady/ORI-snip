@@ -42,7 +42,7 @@ void failedTestReport(const std::filesystem::path &path, const char *failure) no
     }
     catch (...)
     {
-        OutputDebugStringW(L"Tiger Snip: unable to write the failed test report.\n");
+        OutputDebugStringW(L"ORI Snip: unable to write the failed test report.\n");
     }
 }
 } // namespace snip

@@ -1,7 +1,10 @@
 TIGER SNIP 1.0.2
 
 For installation from the shared drive, double-click Tiger Snip Setup.msi once.
-Then open Tiger Snip from the Windows Start menu. No administrator elevation is
+Click Install. Setup confirms success; click Finish to open Tiger Snip with
+Launch Tiger Snip checked, or uncheck it to open the app later from the Start menu.
+Silent/basic-UI installs, repairs, and removals do not open the app.
+No administrator elevation is
 required by this installer; your organization's installation policies still apply.
 The app is installed locally under %LOCALAPPDATA%\Programs\Tiger Snip.
 Personal settings are stored in %LOCALAPPDATA%\Tiger Snip\TigerSnip.ini.

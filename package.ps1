@@ -96,6 +96,15 @@ try {
         'CREATE TABLE `Shortcut` (`Shortcut` CHAR(72) NOT NULL, `Directory_` CHAR(72) NOT NULL, `Name` CHAR(128) NOT NULL LOCALIZABLE, `Component_` CHAR(72) NOT NULL, `Target` CHAR(255) NOT NULL LOCALIZABLE, `Arguments` CHAR(255) LOCALIZABLE, `Description` CHAR(255) LOCALIZABLE, `Hotkey` SHORT, `Icon_` CHAR(72), `IconIndex` SHORT, `ShowCmd` SHORT, `WkDir` CHAR(72) PRIMARY KEY `Shortcut`)',
         'CREATE TABLE `RemoveFile` (`FileKey` CHAR(72) NOT NULL, `Component_` CHAR(72) NOT NULL, `FileName` CHAR(255) LOCALIZABLE, `DirProperty` CHAR(72) NOT NULL, `InstallMode` SHORT NOT NULL PRIMARY KEY `FileKey`)',
         'CREATE TABLE `InstallExecuteSequence` (`Action` CHAR(72) NOT NULL, `Condition` CHAR(255), `Sequence` SHORT PRIMARY KEY `Action`)',
+        'CREATE TABLE `InstallUISequence` (`Action` CHAR(72) NOT NULL, `Condition` CHAR(255), `Sequence` SHORT PRIMARY KEY `Action`)',
+        'CREATE TABLE `Dialog` (`Dialog` CHAR(72) NOT NULL, `HCentering` SHORT NOT NULL, `VCentering` SHORT NOT NULL, `Width` SHORT NOT NULL, `Height` SHORT NOT NULL, `Attributes` LONG, `Title` CHAR(128) LOCALIZABLE, `Control_First` CHAR(50) NOT NULL, `Control_Default` CHAR(50), `Control_Cancel` CHAR(50) PRIMARY KEY `Dialog`)',
+        'CREATE TABLE `Control` (`Dialog_` CHAR(72) NOT NULL, `Control` CHAR(50) NOT NULL, `Type` CHAR(20) NOT NULL, `X` SHORT NOT NULL, `Y` SHORT NOT NULL, `Width` SHORT NOT NULL, `Height` SHORT NOT NULL, `Attributes` LONG, `Property` CHAR(72), `Text` CHAR(0) LOCALIZABLE, `Control_Next` CHAR(50), `Help` CHAR(50) LOCALIZABLE PRIMARY KEY `Dialog_`, `Control`)',
+        'CREATE TABLE `ControlEvent` (`Dialog_` CHAR(72) NOT NULL, `Control_` CHAR(50) NOT NULL, `Event` CHAR(50) NOT NULL, `Argument` CHAR(255) NOT NULL, `Condition` CHAR(255), `Ordering` SHORT PRIMARY KEY `Dialog_`, `Control_`, `Event`, `Argument`, `Condition`)',
+        'CREATE TABLE `EventMapping` (`Dialog_` CHAR(72) NOT NULL, `Control_` CHAR(50) NOT NULL, `Event` CHAR(50) NOT NULL, `Attribute` CHAR(50) NOT NULL PRIMARY KEY `Dialog_`, `Control_`, `Event`)',
+        'CREATE TABLE `CheckBox` (`Property` CHAR(72) NOT NULL, `Value` CHAR(64) PRIMARY KEY `Property`)',
+        'CREATE TABLE `TextStyle` (`TextStyle` CHAR(72) NOT NULL, `FaceName` CHAR(32) NOT NULL LOCALIZABLE, `Size` SHORT NOT NULL, `Color` LONG, `StyleBits` SHORT PRIMARY KEY `TextStyle`)',
+        'CREATE TABLE `CustomAction` (`Action` CHAR(72) NOT NULL, `Type` SHORT NOT NULL, `Source` CHAR(72), `Target` CHAR(255) PRIMARY KEY `Action`)',
+        'CREATE TABLE `Binary` (`Name` CHAR(72) NOT NULL, `Data` OBJECT NOT NULL PRIMARY KEY `Name`)',
         'CREATE TABLE `LaunchCondition` (`Condition` CHAR(255) NOT NULL, `Description` CHAR(255) NOT NULL LOCALIZABLE PRIMARY KEY `Condition`)'
     )
     foreach ($taskSql in $taskSchema) { Invoke-MsiSql $taskSql }
@@ -104,6 +113,7 @@ try {
         ProductLanguage = '1033'; Manufacturer = 'Jack Kempf'
         UpgradeCode = '{74410596-744A-4B20-8FBA-F55363372B9A}'; INSTALLLEVEL = '1'
         ARPNOMODIFY = '1'; ARPCOMMENTS = 'Local screenshot capture and annotation utility.'
+        DefaultUIFont = 'Normal'; LAUNCHAPP = '1'
     }
     foreach ($taskProperty in $taskProperties.GetEnumerator()) {
         Invoke-MsiSql 'INSERT INTO `Property` (`Property`, `Value`) VALUES (?, ?)' @($taskProperty.Key, $taskProperty.Value)
@@ -141,6 +151,101 @@ try {
     foreach ($taskAction in $taskActions.GetEnumerator()) {
         Invoke-MsiSql 'INSERT INTO `InstallExecuteSequence` (`Action`, `Sequence`) VALUES (?, ?)' @($taskAction.Key, [int]$taskAction.Value)
     }
+
+    # Launch only from the successful full-UI Finish button, after the transaction
+    # has committed. There is no launch action in the execute sequence, so silent
+    # deployment, repair, cancellation, failure, and removal cannot open the app.
+    # 210 = installed-file EXE (18) + asynchronous/no-wait (192).
+    Invoke-MsiSql 'INSERT INTO `CustomAction` (`Action`, `Type`, `Source`, `Target`) VALUES (?, ?, ?, ?)' @('LaunchTigerSnip', 210, 'AppExe', '--open')
+    Invoke-MsiSql 'INSERT INTO `CheckBox` (`Property`, `Value`) VALUES (?, ?)' @('LAUNCHAPP', '1')
+    foreach ($taskRow in @(@('Normal', 'Segoe UI', 10, 0), @('Heading', 'Segoe UI', 14, 1), @('Footer', 'Segoe UI', 9, 0))) {
+        Invoke-MsiSql 'INSERT INTO `TextStyle` (`TextStyle`, `FaceName`, `Size`, `StyleBits`) VALUES (?, ?, ?, ?)' $taskRow
+    }
+    foreach ($taskRow in @(
+        @('LaunchConditions', $null, 100), @('CostInitialize', $null, 800),
+        @('FileCost', $null, 900), @('CostFinalize', $null, 1000),
+        @('WelcomeDlg', 'NOT Installed AND UILevel = 5', 1100),
+        @('ProgressDlg', $null, 1200), @('ExecuteAction', $null, 1300),
+        @('FinishedDlg', 'NOT Installed AND NOT (REMOVE ~= "ALL") AND UILevel = 5', -1),
+        @('CanceledDlg', 'UILevel = 5', -2), @('FailedDlg', 'UILevel = 5', -3),
+        @('RemovedDlg', 'REMOVE ~= "ALL" AND UILevel = 5', 1400),
+        @('MaintenanceDlg', 'Installed AND NOT (REMOVE ~= "ALL") AND UILevel = 5', 1410)
+    )) {
+        Invoke-MsiSql 'INSERT INTO `InstallUISequence` (`Action`, `Condition`, `Sequence`) VALUES (?, ?, ?)' $taskRow
+    }
+    foreach ($taskRow in @(
+        @('WelcomeDlg', 3, 'Install', 'Install', 'Cancel'),
+        @('ProgressDlg', 1, 'Cancel', $null, 'Cancel'),
+        @('FinishedDlg', 3, 'Finish', 'Finish', 'Close'),
+        @('CanceledDlg', 3, 'Close', 'Close', 'Close'),
+        @('FailedDlg', 3, 'Close', 'Close', 'Close'),
+        @('RemovedDlg', 3, 'Close', 'Close', 'Close'),
+        @('MaintenanceDlg', 3, 'Close', 'Close', 'Close')
+    )) {
+        Invoke-MsiSql 'INSERT INTO `Dialog` (`Dialog`, `HCentering`, `VCentering`, `Width`, `Height`, `Attributes`, `Title`, `Control_First`, `Control_Default`, `Control_Cancel`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' @($taskRow[0], 50, 50, 360, 210, $taskRow[1], 'Tiger Snip Setup', $taskRow[2], $taskRow[3], $taskRow[4])
+    }
+    $taskControls = @(
+        @('WelcomeDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Install Tiger Snip', $null),
+        @('WelcomeDlg', 'Details', 'Text', 20, 98, 320, 65, 3, $null, 'Capture, annotate, and share screenshots. Setup installs Tiger Snip for your Windows account and adds it to the Start menu.', $null),
+        @('WelcomeDlg', 'Install', 'PushButton', 180, 174, 75, 23, 3, $null, '&Install', 'Cancel'),
+        @('WelcomeDlg', 'Cancel', 'PushButton', 265, 174, 75, 23, 3, $null, 'Cancel', 'Install'),
+        @('ProgressDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Updating Tiger Snip', $null),
+        @('ProgressDlg', 'Details', 'Text', 20, 98, 320, 35, 3, $null, 'Please wait while setup makes the requested changes.', $null),
+        @('ProgressDlg', 'Progress', 'ProgressBar', 20, 140, 320, 16, 3, $null, $null, $null),
+        @('ProgressDlg', 'Cancel', 'PushButton', 265, 174, 75, 23, 3, $null, 'Cancel', 'Cancel'),
+        @('FinishedDlg', 'Heading', 'Text', 112, 20, 228, 58, 3, $null, '{\Heading}Tiger Snip is installed', $null),
+        @('FinishedDlg', 'Details', 'Text', 20, 98, 320, 42, 3, $null, 'Setup completed successfully. You can also open Tiger Snip anytime from the Windows Start menu.', $null),
+        @('FinishedDlg', 'Launch', 'CheckBox', 20, 144, 320, 22, 3, 'LAUNCHAPP', 'Launch Tiger Snip', 'Finish'),
+        @('FinishedDlg', 'Finish', 'PushButton', 265, 174, 75, 23, 3, $null, '&Finish', 'Launch'),
+        # The close/X/Escape action dismisses success without launching.
+        @('FinishedDlg', 'Close', 'PushButton', 180, 174, 75, 23, 2, $null, 'Close', $null)
+    )
+    foreach ($taskRow in @(
+        @('CanceledDlg', 'Setup canceled', 'Setup was canceled. Tiger Snip was not newly installed by this attempt.'),
+        @('FailedDlg', 'Setup could not finish', 'Tiger Snip setup did not complete successfully. Contact IT or Jack Kempf for help.'),
+        @('RemovedDlg', 'Tiger Snip was removed', 'The app has been uninstalled. Your personal preferences remain for a future installation.'),
+        @('MaintenanceDlg', 'Tiger Snip setup is complete', 'The requested changes completed successfully. Open Tiger Snip from the Windows Start menu.')
+    )) {
+        $taskControls += ,@($taskRow[0], 'Heading', 'Text', 112, 20, 228, 58, 3, $null, ('{\Heading}' + $taskRow[1]), $null)
+        $taskControls += ,@($taskRow[0], 'Details', 'Text', 20, 98, 320, 65, 3, $null, $taskRow[2], $null)
+        $taskControls += ,@($taskRow[0], 'Close', 'PushButton', 265, 174, 75, 23, 3, $null, 'Close', 'Close')
+    }
+    foreach ($taskDialog in @('WelcomeDlg', 'ProgressDlg', 'FinishedDlg', 'CanceledDlg', 'FailedDlg', 'RemovedDlg', 'MaintenanceDlg')) {
+        $taskControls += ,@($taskDialog, 'Logo', 'Bitmap', 20, 20, 64, 64, 1, $null, 'TigerSnipLogo', $null)
+        $taskControls += ,@($taskDialog, 'Maintainer', 'Text', 20, 180, 150, 16, 3, $null, '{\Footer}Maintained by Jack Kempf', $null)
+    }
+    foreach ($taskRow in $taskControls) {
+        Invoke-MsiSql 'INSERT INTO `Control` (`Dialog_`, `Control`, `Type`, `X`, `Y`, `Width`, `Height`, `Attributes`, `Property`, `Text`, `Control_Next`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)' $taskRow
+    }
+    foreach ($taskRow in @(
+        @('WelcomeDlg', 'Install', 'EndDialog', 'Return', '1', 1),
+        @('WelcomeDlg', 'Cancel', 'EndDialog', 'Exit', '1', 1),
+        @('ProgressDlg', 'Cancel', 'EndDialog', 'Exit', '1', 1),
+        @('FinishedDlg', 'Finish', 'DoAction', 'LaunchTigerSnip', 'LAUNCHAPP = "1" AND NOT Installed AND NOT (REMOVE ~= "ALL") AND UILevel = 5', 1),
+        @('FinishedDlg', 'Finish', 'EndDialog', 'Return', '1', 2),
+        @('FinishedDlg', 'Close', 'EndDialog', 'Return', '1', 1),
+        @('CanceledDlg', 'Close', 'EndDialog', 'Return', '1', 1),
+        @('FailedDlg', 'Close', 'EndDialog', 'Return', '1', 1),
+        @('RemovedDlg', 'Close', 'EndDialog', 'Return', '1', 1),
+        @('MaintenanceDlg', 'Close', 'EndDialog', 'Return', '1', 1)
+    )) {
+        Invoke-MsiSql 'INSERT INTO `ControlEvent` (`Dialog_`, `Control_`, `Event`, `Argument`, `Condition`, `Ordering`) VALUES (?, ?, ?, ?, ?, ?)' $taskRow
+    }
+    Invoke-MsiSql 'INSERT INTO `EventMapping` (`Dialog_`, `Control_`, `Event`, `Attribute`) VALUES (?, ?, ?, ?)' @('ProgressDlg', 'Progress', 'SetProgress', 'Progress')
+    # Windows 10+ Installer Bitmap controls accept PNG through WIC. Embed the
+    # existing app artwork directly and scale it to the same square on each page.
+    $taskLogoRecord = Invoke-MsiCom $taskInstaller 'CreateRecord' @(2)
+    $taskLogoView = Invoke-MsiCom $taskDatabase 'OpenView' @('INSERT INTO `Binary` (`Name`, `Data`) VALUES (?, ?)')
+    try {
+        Invoke-MsiCom $taskLogoRecord 'StringData' @(1, 'TigerSnipLogo') -Set
+        $taskLogoPath = [string](Join-Path $taskRoot 'resources\app-icon.png')
+        Invoke-MsiCom $taskLogoRecord 'SetStream' @(2, $taskLogoPath)
+        Invoke-MsiCom $taskLogoView 'Execute' @($taskLogoRecord)
+        Invoke-MsiCom $taskLogoView 'Close'
+    } finally {
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($taskLogoView)
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($taskLogoRecord)
+    }
     $taskStream = Invoke-MsiCom $taskInstaller 'CreateRecord' @(2)
     $taskView = Invoke-MsiCom $taskDatabase 'OpenView' @('INSERT INTO `_Streams` (`Name`, `Data`) VALUES (?, ?)')
     try {
@@ -171,6 +276,8 @@ $taskHashes = @('Tiger Snip 1.0.2 release information',
     ('Packaged: ' + [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'),
     'Distribution file: Tiger Snip Setup.msi',
     'Installation: current user; local app and Start menu shortcut; no automatic startup.',
+    'Interactive setup: success confirmation; Launch Tiger Snip checked by default on Finish.',
+    'Silent/basic-UI setup, repair, and removal do not launch the app.',
     'Settings: current user LocalAppData; personal preferences are excluded from this package.',
     'Build: C++20, static runtime; package authored with Windows Installer and makecab.',
     ('Compiler: ' + $taskBuildRecord.compilerVersion[0]),

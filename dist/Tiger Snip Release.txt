@@ -1,29 +1,31 @@
 Tiger Snip 1.0.2 release information
-Packaged: 2026-10-06 22:26:06 UTC
+Packaged: 2026-10-07 01:05:10 UTC
 Distribution file: Tiger Snip Setup.msi
 Installation: current user; local app and Start menu shortcut; no automatic startup.
+Interactive setup: success confirmation; Launch Tiger Snip checked by default on Finish.
+Silent/basic-UI setup, repair, and removal do not launch the app.
 Settings: current user LocalAppData; personal preferences are excluded from this package.
 Build: C++20, static runtime; package authored with Windows Installer and makecab.
 Compiler: clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)
-Executable built: 10/06/2026 22:23:53
+Executable built: 10/07/2026 01:05:09
 Build record: Tiger Snip Build.json (compiler/tool hashes, options, source-input and EXE hashes).
 Validated toolchain provenance: BUILD-TOOLCHAIN.md in the source repository.
 Signing: unsigned. IT deployment policy remains to be validated.
-Source base commit at build time: 0b1433f0bcd705bce58c0f5b01bec61acbd2831c
+Source base commit at build time: b6905eec48a85f315bccdd9574ddd9c7d9588ad7
 Working tree had uncommitted changes at build time: True
 A source archive without Git metadata records those fields as unknown; input hashes still identify the actual files.
 
 SHA256:
-7691825C6FEB271F1ED793BC4B2ED1E9C23D91ACEF1C9D3948EA59B38F5B2489  Tiger Snip Setup.msi
-626D07E3223681CA5E7F0D6B38F615FBB14EEDC7D6C35D3DAEDAA7021186C285  Tiger Snip Build.json
-62148BE247F7146B9424CF4A91818C0E602E6DE2B681D7661235BB4FECA8D520  Tiger Snip.exe
-024C98A5D0E8BA9AFF4AABF06AAC77D2CFB17CEFA629257DF98ADBF379577BEC  Quick Start.txt
+BCC593048959D1938D1B0A934B916AD6618089FD55B5EDB0099C22D5A7B31AA8  Tiger Snip Setup.msi
+CEDFC3584D13B981FAE1EE9A55B4A10190C896930990DCD3AC54EF50D77363DC  Tiger Snip Build.json
+9C8961FE433E3C37210BAB38165976A72F26BF6023EBD151DFCB6141B3C77DC2  Tiger Snip.exe
+AD861DFE0CE718CF8DFAAFFE19F4D2D878E070008A49721980A837095BA1F4CC  Quick Start.txt
 A9ED3EAE930ADBC631B83300B78AB5D228C9B1E4560D64EC4B4EA2BCF69F4569  LLVM.txt
 6F8707C004133080B2E11DA8CAEFD1D71531B7423AE9C9E3D6043801D24BF5B2  MinGW-runtime.txt
 
 Build input SHA256:
 C93A30E0393DC7C5737F999B6D76EA49F24A50E7B53D966B805994E54876D245  build.ps1
-12D2962F4D9D924AB5D7B9B2A0ACD70DF8BA7608E62936A029735D526E9C1F0F  package.ps1
+19C722D125BA306C9830C54149C6DF9776B58F9CE214AEDBAB2E3713ED034F8F  package.ps1
 833258EF5FC15A993D789009BE12276D7ED2E329865B962A95470EB76FE67F28  CMakeLists.txt
 A8D8FEFF554075FF32F17603DD554F2EE4FD37F2CC586307399EDF447E119501  scripts\run-test.ps1
 160241C570B007418303A4122315DA612E41A9EF92E5393C6B5D7ADE550BF524  scripts\write-build-record.ps1

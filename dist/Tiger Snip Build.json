@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "builtAtUtc": "2026-10-06T22:23:53Z",
-  "sourceBaseCommit": "0b1433f0bcd705bce58c0f5b01bec61acbd2831c",
+  "builtAtUtc": "2026-10-07T01:05:09Z",
+  "sourceBaseCommit": "b6905eec48a85f315bccdd9574ddd9c7d9588ad7",
   "workingTreeHasUncommittedChanges": true,
   "compilerVersion": [
     "clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)",
@@ -75,7 +75,7 @@
   "powershellVersion": "7.6.5",
   "output": {
     "name": "Tiger Snip.exe",
-    "sha256": "62148BE247F7146B9424CF4A91818C0E602E6DE2B681D7661235BB4FECA8D520"
+    "sha256": "9C8961FE433E3C37210BAB38165976A72F26BF6023EBD151DFCB6141B3C77DC2"
   },
   "inputs": [
     {
@@ -88,7 +88,7 @@
     },
     {
       "path": "package.ps1",
-      "sha256": "12D2962F4D9D924AB5D7B9B2A0ACD70DF8BA7608E62936A029735D526E9C1F0F"
+      "sha256": "19C722D125BA306C9830C54149C6DF9776B58F9CE214AEDBAB2E3713ED034F8F"
     },
     {
       "path": "resources\\app-icon.png",

@@ -10,7 +10,7 @@ Tiger Snip is a local Windows screenshot and annotation tool. Capture an area or
 
 ## Installation
 
-Open **dist/Tiger Snip Setup.msi**, then launch **Tiger Snip** from the Start menu. Each user gets a local installation. For shared-drive distribution, place the MSI in the shared folder.
+Open **dist/Tiger Snip Setup.msi** and click **Install**. When setup confirms success, click **Finish** to launch Tiger Snip (or uncheck **Launch Tiger Snip**). You can also open it from the Start menu. Each user gets a local installation. For shared-drive distribution, place the MSI in the shared folder.
 
 The standalone **dist/Tiger Snip.exe** can also run directly.
 

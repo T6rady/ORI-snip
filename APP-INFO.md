@@ -4,7 +4,7 @@ Tiger Snip is a Windows screenshot tool for capturing, annotating, copying, and 
 
 ## Installation
 
-Open **Tiger Snip Setup.msi**, then launch **Tiger Snip** from the Start menu. The installer can be distributed through a shared folder; each user installs a local copy in `%LOCALAPPDATA%\Programs\Tiger Snip`.
+Open **Tiger Snip Setup.msi** and click **Install**. Setup confirms successful installation and offers **Launch Tiger Snip**, checked by default. Click **Finish** to open the app, or clear the checkbox to launch it later from the Start menu. Silent/basic-UI installations, repairs, and removals do not launch the app. The installer can be distributed through a shared folder; each user installs a local copy in `%LOCALAPPDATA%\Programs\Tiger Snip`.
 
 Settings are saved in `%LOCALAPPDATA%\Tiger Snip\TigerSnip.ini`. Startup at sign-in is optional. Remove the app through Windows Installed apps. To replace the current 1.0.2 package, close the app, uninstall the previous copy, and install the replacement. Settings remain.
 

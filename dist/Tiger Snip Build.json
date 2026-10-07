@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "builtAtUtc": "2026-10-07T01:48:35Z",
-  "sourceBaseCommit": "38cb93757aaf953627b2d640b8d2bf743d8165d9",
+  "builtAtUtc": "2026-10-07T02:20:14Z",
+  "sourceBaseCommit": "948e0385fa0bfe587efc7da765e97c1749467730",
   "workingTreeHasUncommittedChanges": true,
   "compilerVersion": [
     "clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)",
@@ -75,7 +75,7 @@
   "powershellVersion": "7.6.5",
   "output": {
     "name": "Tiger Snip.exe",
-    "sha256": "CC0732DA1299D017C89D3DE1F7006E3893C63F60F8CA6B8B0781BC02384D2696"
+    "sha256": "E5F961EEDAAB90AE6EFCDC0B0CD2A582EAA3DBAC08191534C7B230BC4C40BEF8"
   },
   "inputs": [
     {
@@ -164,11 +164,31 @@
     },
     {
       "path": "src\\editor_chrome.h",
-      "sha256": "00B09410CD685F0AE12A33C7960A58B448C39E6567B2FEB8D65503B78603CDE8"
+      "sha256": "C641F0FF37B182688B826B4D6102097D2EE6B53076F1174CDEE3A287FFB7405D"
+    },
+    {
+      "path": "src\\editor_classic_chrome.h",
+      "sha256": "3CE0C6E4F08097AEC9EF0D1BDDE29592F44DED1C8B615E7A9FBF685977A63749"
+    },
+    {
+      "path": "src\\editor_classic_layout.h",
+      "sha256": "0A9C38A27463F5D17C4234CFE8536845E8B0A9E4CCBD616EA24701936EF63255"
     },
     {
       "path": "src\\editor_layout.h",
       "sha256": "F9DBE087D486E16CF389F373682CDEC276CB6CEA05AAC7B6E7866D1E20AD5D21"
+    },
+    {
+      "path": "src\\editor_settings_chrome.h",
+      "sha256": "38E34B5DB3375B2287BD7F4C2435E2114E732F130CE87C070C858771B22D6F1B"
+    },
+    {
+      "path": "src\\editor_settings_layout.h",
+      "sha256": "0619CC4CF90E8BF22978035FC8B2920C2B5C6074C1D12926A1AEC32EC17D2E23"
+    },
+    {
+      "path": "src\\editor_theme.h",
+      "sha256": "2F310B2422938136525EAB491807253401B8404BAD5573B163539717E0798C2A"
     },
     {
       "path": "src\\file_io.cpp",
@@ -188,7 +208,7 @@
     },
     {
       "path": "src\\main.cpp",
-      "sha256": "7FD2B3A64BBE97F48D07B06C5BA1480575B3744A558F0CE2903A8A0CCD72EDA5"
+      "sha256": "E315F85234F3D21DE2CC744C011AF7D998B358B0D1DCFDB721A99965F552A8F2"
     },
     {
       "path": "src\\model.cpp",
@@ -256,7 +276,7 @@
     },
     {
       "path": "tests\\ui.cpp",
-      "sha256": "48DD47EA4450DC106A1C6E9572F67F7DB5CE81481E7960D4F506CB09E3ADEF43"
+      "sha256": "257A131AD2CD5982869085C30D0EFEEC83D8BE441DAF199612F9CDF673518E5D"
     }
   ]
 }

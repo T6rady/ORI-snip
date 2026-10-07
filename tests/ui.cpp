@@ -39,13 +39,18 @@ int wmain()
         app.menuHidden = true;
         SetMenu(app.window, nullptr);
         ShowWindow(app.window, SW_SHOWNOACTIVATE);
-        // The redesigned gear must expose the complete existing menu tree, including
-        // nested export choices, without taking ownership of or losing its submenus.
+        // Both interfaces preserve the complete existing menu tree.
         const HMENU menu = app.windowedMenu;
-        const std::array<int, 14> settings = {
-            Settings,           AutoCopy,         RenderingSettings,   SaveLocation, Startup,
-            ProfessionalBorder, ProfessionalBlur, ProfessionalRounded, SamtecLogo,   ToggleActions,
-            ToggleTools,        ToggleFormatting, FullScreen,          About};
+        const std::array<int, 22> settings = {Settings,          AutoCopy,
+                                              RenderingSettings, SaveLocation,
+                                              Startup,           ProfessionalBorder,
+                                              ProfessionalBlur,  ProfessionalRounded,
+                                              SamtecLogo,        ToggleActions,
+                                              ToggleTools,       ToggleFormatting,
+                                              FullScreen,        About,
+                                              InterfaceClassic,  InterfaceOrange,
+                                              ThemePurple, ThemeOrange, ThemeBlue, ThemeTeal,
+                                              AppearanceLight, AppearanceDark};
         for (int id : settings)
             require(GetMenuState(menu, id, MF_BYCOMMAND) != static_cast<UINT>(-1),
                     "An existing setting or view option is missing.");
@@ -58,13 +63,11 @@ int wmain()
             submenus[i] = GetSubMenu(menu, i);
         for (int repeat = 0; repeat < 2; ++repeat)
         {
-            require(SetTimer(app.window, 97, 50,
-                             [](HWND window, UINT, UINT_PTR timer, DWORD) {
-                                 KillTimer(window, timer);
-                                 EndMenu();
-                             }) != 0,
-                    "Cannot drive the Settings gear popup.");
             command(AppMenu);
+            require(app.settingsPanelOpen && !app.settingsWindow && !GetMenu(app.window),
+                    "Side Settings did not open its in-editor panel.");
+            processKey(VK_ESCAPE);
+            require(!app.settingsPanelOpen, "Escape did not dismiss Settings.");
             require(IsMenu(menu) && GetMenuItemCount(menu) == 5,
                     "Closing the gear popup destroyed the persistent menus.");
             for (int i = 0; i < 5; ++i)
@@ -205,44 +208,266 @@ int wmain()
         loadToolPreferences();
         require(std::abs(app.opacities[static_cast<size_t>(Tool::Arrow)] - .5f) < .02f,
                 "Opacity preferences did not restore independently of annotation undo.");
-        // Each tool's contextual controls remain inside their own regions at all supported DPIs.
-        for (float dpi : {1.0f, 1.5f, 2.0f})
-            for (Point size : {Point{850, 430}, Point{1050, 740}, Point{1280, 840}})
+        const auto layoutExport = renderedExport();
+        const auto layoutItems = app.document.items;
+        const auto layoutSelection = app.document.selected;
+        const auto layoutUndo = app.document.canUndo();
+        command(ToggleFormatting);
+        command(InterfaceClassic);
+        require(app.classicUI && GetMenu(app.window) == app.windowedMenu &&
+                    canvasRect().left == 0 && canvasRect().right == clientDips().right &&
+                    app.collapsedRows == 0 &&
+                    (GetMenuState(app.interfaceMenu, InterfaceClassic, MF_BYCOMMAND) & MF_CHECKED),
+                "Top toolbars did not activate with their native menu.");
+        require(preferenceUInt(app.iniPath, L"Settings", L"ToolbarLayout", 9) == 0,
+                "The toolbar layout did not save immediately.");
+        command(ToggleTools);
+        command(InterfaceOrange);
+        // Every previous setting/action is available through the new panel.
+        command(AppMenu);
+        std::vector<int> panelCommands;
+        for (int page = SettingsPageFirst; page <= SettingsPageLast; ++page)
+        {
+            command(page);
+            for (const auto &control : settingsPanelLayout().controls)
+                panelCommands.push_back(control.command);
+        }
+        for (int id : {InterfaceClassic, InterfaceOrange, ThemePurple, ThemeOrange, ThemeBlue,
+                       ThemeTeal, AppearanceLight, AppearanceDark, SettingsRenderer, Startup,
+                       SaveLocation, SettingsAreaKey, SettingsAllKey, AutoCopy, ProfessionalBorder,
+                       ProfessionalBlur, ProfessionalRounded, SamtecLogo, ToggleActions,
+                       ToggleTools, ToggleFormatting, FullScreen, Fit, Actual, NewSnip, InstantSnip,
+                       RecentSnips, Copy, Save, SaveAs, Undo, Redo, DeleteSelected, Clear,
+                       CropTool, EraserTool, Exit})
+            require(std::find(panelCommands.begin(), panelCommands.end(), id) != panelCommands.end(),
+                    "The modern Settings panel lost an existing option or action.");
+        for (int style = 0; style < 6; ++style)
+            require(std::find(panelCommands.begin(), panelCommands.end(), LogoStyleFirst + style) !=
+                        panelCommands.end(),
+                    "The modern Settings panel lost a logo style.");
+        command(SettingsPageFirst);
+        auto settingsClick = [&](int id) {
+            buildButtons();
+            auto control = std::find_if(app.buttons.begin() + app.settingsButtonsStart,
+                                        app.buttons.end(), [&](const Button &b) { return b.command == id; });
+            require(control != app.buttons.end(), "Settings pointer control is missing.");
+            Point point{(control->rect.left + control->rect.right) / 2,
+                        (control->rect.top + control->rect.bottom) / 2};
+            mouseDown(mouse(point));
+            mouseUp(mouse(point));
+        };
+        settingsClick(ThemeBlue);
+        require(app.colorTheme == 2 && app.settingsPanelOpen && !app.pressed &&
+                    GetCapture() != app.window,
+                "Settings theme cards did not release pointer capture and apply the theme.");
+        settingsClick(AppearanceDark);
+        require(app.darkTheme, "Settings appearance cards did not apply Dark.");
+        settingsClick(ThemeOrange);
+        settingsClick(AppearanceLight);
+        const auto themeExport = renderedExport();
+        const auto themeItems = app.document.items;
+        const auto themeSelection = app.document.selected;
+        const auto themeUndo = app.document.canUndo();
+        const float themeZoom = app.view.scale;
+        // Dimmed background pointer/key events must not edit or zoom the image.
+        const auto padding = settingsPanelLayout().panel;
+        Point paddedPoint{padding.left + 5, padding.top + 5};
+        mouseDown(mouse(paddedPoint));
+        mouseMove(mouse(paddedPoint + Point{50, 30}));
+        mouseUp(mouse(paddedPoint));
+        SendMessageW(app.window, WM_LBUTTONDBLCLK, MK_LBUTTON, mouse(paddedPoint));
+        mouseUp(mouse(paddedPoint));
+        SendMessageW(app.window, WM_CONTEXTMENU, reinterpret_cast<WPARAM>(app.window),
+                     MAKELPARAM(30, 30));
+        processKey(VK_DELETE);
+        require(!app.textEdit && app.drag == Drag::None && app.settingsPanelOpen &&
+                    app.document.items == themeItems && app.document.selected == themeSelection &&
+                    app.document.canUndo() == themeUndo && app.view.scale == themeZoom,
+                "Settings allowed editing the screenshot underneath.");
+        processKey(VK_TAB);
+        require(app.settingsFocus != SettingsPageFirst, "Settings keyboard focus did not move.");
+        command(SettingsPageFirst + 3);
+        processKey(VK_END);
+        require(app.settingsScroll == settingsPanelLayout().maxScroll && app.settingsScroll > 0,
+                "Settings cannot scroll to all export options.");
+        saveBytes(L"ui-settings-export.png", app.graphics.png(renderEditorPreview()));
+        // Shortcut recording uses the same transactional registration as the original dialog.
+        command(SettingsPageFirst + 2);
+        const auto savedArea = app.hotkey;
+        BYTE previousKeyboard[256]{}, emptyKeyboard[256]{};
+        GetKeyboardState(previousKeyboard);
+        SetKeyboardState(emptyKeyboard);
+        command(SettingsAreaKey);
+        processKey('A');
+        require(app.settingsRecording && !app.settingsError.empty() && app.hotkey == savedArea,
+                "Settings accepted an invalid plain letter shortcut.");
+        processKey(VK_ESCAPE);
+        require(app.settingsPanelOpen && !app.settingsRecording && app.hotkey == savedArea,
+                "Cancelling shortcut recording changed the shortcut or closed Settings.");
+        SetKeyboardState(previousKeyboard);
+        saveBytes(L"ui-settings-capture.png", app.graphics.png(renderEditorPreview()));
+        command(SettingsPageFirst);
+        // Themes apply independently of layout and never change the rendered export.
+        for (int appearance : {AppearanceLight, AppearanceDark})
+            for (int theme = ThemePurple; theme <= ThemeTeal; ++theme)
             {
-                app.dpi = dpi;
-                SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(size.x * dpi),
-                             static_cast<int>(size.y * dpi), SWP_NOZORDER | SWP_NOACTIVATE);
-                for (Tool tool : {Tool::Select, Tool::Pen, Tool::Highlight, Tool::Text, Tool::Arrow,
-                                  Tool::Circle, Tool::Check, Tool::Line})
+                command(appearance);
+                command(theme);
+                saveBytes(std::wstring(L"ui-settings-") + ThemeNames[theme - ThemePurple] +
+                              (app.darkTheme ? L"-dark.png" : L"-light.png"),
+                          app.graphics.png(renderEditorPreview()));
+                processKey(VK_ESCAPE);
+                for (int layout : {InterfaceClassic, InterfaceOrange})
                 {
-                    app.tool = tool;
-                    app.document.selected = -1;
-                    app.inspectorScroll = 0;
-                    updateView();
-                    buildButtons();
-                    const auto c = clientDips(), viewport = canvasRect();
-                    for (const auto &b : app.buttons)
+                    command(layout);
+                    if (app.classicUI)
                     {
-                        require(b.rect.left >= 0 && b.rect.top >= 0 &&
-                                    b.rect.right <= c.right + .1f &&
-                                    b.rect.bottom <= c.bottom + .1f,
-                                "A UI control is clipped by the window.");
-                        if (propertyCommand(b.command) && b.rect.left >= viewport.left)
-                            require(b.rect.left >= viewport.right,
-                                    "Properties overlap the screenshot.");
+                        MENUITEMINFOW root{};
+                        root.cbSize = sizeof(root);
+                        root.fMask = MIIM_FTYPE | MIIM_DATA;
+                        require(GetMenuItemInfoW(app.windowedMenu, 0, TRUE, &root) &&
+                                    !!(root.fType & MFT_OWNERDRAW) == app.darkTheme &&
+                                    rootMenuItem(root.dwItemData) == app.darkTheme,
+                                "The native top menu did not follow Light/Dark appearance.");
                     }
-                    saveBytes(L"ui-layout-" + std::to_wstring(static_cast<int>(dpi * 100)) + L"-" +
-                                  std::to_wstring(static_cast<int>(size.x)) + L"-" +
-                                  ToolNames[static_cast<int>(tool)] + L".png",
-                              app.graphics.png(renderEditorPreview()));
+                    require(app.colorTheme == static_cast<unsigned>(theme - ThemePurple) &&
+                                app.darkTheme == (appearance == AppearanceDark),
+                            "Changing layout reset the color theme or appearance.");
+                    auto preview = renderEditorPreview();
+                    // Sample a solid toolbar surface, away from labels and controls.
+                    const size_t i = (static_cast<size_t>(3) * preview.width + 3) * 4;
+                    require((preview.pixels[i] < 100) == app.darkTheme,
+                            "Dark appearance did not theme the toolbar surface.");
+                    saveBytes(std::wstring(app.classicUI ? L"ui-top-" : L"ui-side-") +
+                                  ThemeNames[theme - ThemePurple] +
+                                  (app.darkTheme ? L"-dark.png" : L"-light.png"),
+                              app.graphics.png(preview));
+                    require(renderedExport().pixels == themeExport.pixels &&
+                                app.document.items == themeItems &&
+                                app.document.selected == themeSelection &&
+                                app.document.canUndo() == themeUndo,
+                            "A theme changed annotation colors, image pixels, selection or history.");
                 }
+                command(AppMenu);
+                command(SettingsPageFirst);
             }
+        require(saveToolPreferences(), "Cannot save theme preferences.");
+        app.colorTheme = 0;
+        app.darkTheme = false;
+        loadToolPreferences();
+        require(app.colorTheme == 3 && app.darkTheme && !app.classicUI,
+                "Color, appearance and layout preferences did not restore independently.");
+        command(ThemeOrange);
+        command(AppearanceLight);
+        // Compact DPI layouts keep every control reachable by keyboard/scroll.
+        for (float dpi : {1.0f, 1.5f, 2.0f})
+        {
+            app.dpi = dpi;
+            SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(850 * dpi),
+                         static_cast<int>(430 * dpi), SWP_NOZORDER | SWP_NOACTIVATE);
+            for (int page = SettingsPageFirst; page <= SettingsPageLast; ++page)
+            {
+                command(page);
+                processKey(VK_END);
+                const auto l = settingsPanelLayout();
+                for (size_t i = app.settingsButtonsStart; i < app.buttons.size(); ++i)
+                {
+                    const auto r = app.buttons[i].rect;
+                    require(r.left >= l.panel.left && r.right <= l.panel.right &&
+                                r.top >= l.panel.top && r.bottom <= l.panel.bottom,
+                            "A Settings control is clipped by the compact window.");
+                }
+                saveBytes(L"ui-settings-compact-" + std::to_wstring(static_cast<int>(dpi * 100)) +
+                              L"-" + SettingsPages[page - SettingsPageFirst] + L".png",
+                          app.graphics.png(renderEditorPreview()));
+            }
+        }
+        app.dpi = 1;
+        SetWindowPos(app.window, nullptr, 0, 0, 1280, 840, SWP_NOZORDER | SWP_NOACTIVATE);
+        command(SettingsPageFirst);
+        mouseDown(mouse({5, 5}));
+        require(!app.settingsPanelOpen && app.drag == Drag::None,
+                "Outside click did not dismiss Settings and consume the pointer event.");
+        require(!app.classicUI && !GetMenu(app.window) && app.collapsedRows == 4 &&
+                    (GetMenuState(app.interfaceMenu, InterfaceOrange, MF_BYCOMMAND) & MF_CHECKED),
+                "Side panels did not restore their own visibility settings.");
+        command(ToggleFormatting);
+        command(InterfaceClassic);
+        require(app.collapsedRows == 2, "Top toolbars lost their visibility settings.");
+        command(ToggleTools);
+        loadToolPreferences();
+        require(app.classicUI && app.collapsedRows == 2,
+                "Top toolbars and their saved visibility did not survive reload.");
+        command(ToggleTools);
+        command(InterfaceOrange);
+        require(app.document.items == layoutItems && app.document.selected == layoutSelection &&
+                    app.document.canUndo() == layoutUndo &&
+                    renderedExport().pixels == layoutExport.pixels,
+                "Changing toolbar layout changed the image, selection, annotations or history.");
+        app.fit = false;
+        app.view.scale = .9f;
+        updateView();
+        command(InterfaceClassic);
+        command(InterfaceOrange);
+        require(!app.fit && std::abs(app.view.scale - .9f) < .001f,
+                "Changing toolbar layout reset the user's zoom.");
+        app.fit = true;
+        updateView();
+        command(FullScreen);
+        command(InterfaceClassic);
+        require(app.fullScreen && !GetMenu(app.window),
+                "Layout switch exposed menus in fullscreen.");
+        command(FullScreen);
+        require(GetMenu(app.window) == app.windowedMenu,
+                "Exiting fullscreen did not restore the top menu.");
+        command(InterfaceOrange);
+        // Each tool's contextual controls remain inside their own regions at all supported DPIs.
+        for (int layout : {InterfaceClassic, InterfaceOrange})
+        {
+            command(layout);
+            for (float dpi : {1.0f, 1.5f, 2.0f})
+                for (Point size : {Point{850, 430}, Point{1050, 740}, Point{1280, 840}})
+                {
+                    app.dpi = dpi;
+                    SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(size.x * dpi),
+                                 static_cast<int>(size.y * dpi), SWP_NOZORDER | SWP_NOACTIVATE);
+                    for (Tool tool : {Tool::Select, Tool::Pen, Tool::Highlight, Tool::Text,
+                                      Tool::Arrow, Tool::Circle, Tool::Check, Tool::Line})
+                    {
+                        app.tool = tool;
+                        app.document.selected = -1;
+                        app.inspectorScroll = 0;
+                        updateView();
+                        buildButtons();
+                        const auto c = clientDips(), viewport = canvasRect();
+                        for (const auto &b : app.buttons)
+                        {
+                            require(b.rect.left >= 0 && b.rect.top >= 0 &&
+                                        b.rect.right <= c.right + .1f &&
+                                        b.rect.bottom <= c.bottom + .1f,
+                                    "A UI control is clipped by the window.");
+                            if (!app.classicUI && propertyCommand(b.command) &&
+                                b.rect.left >= viewport.left)
+                                require(b.rect.left >= viewport.right,
+                                        "Properties overlap the screenshot.");
+                        }
+                        saveBytes(std::wstring(app.classicUI ? L"ui-top-" : L"ui-side-") +
+                                      std::to_wstring(static_cast<int>(dpi * 100)) + L"-" +
+                                      std::to_wstring(static_cast<int>(size.x)) + L"-" +
+                                      ToolNames[static_cast<int>(tool)] + L".png",
+                                  app.graphics.png(renderEditorPreview()));
+                    }
+                }
+        }
         app.dpi = 1;
         SetWindowPos(app.window, nullptr, 0, 0, 1280, 840, SWP_NOZORDER | SWP_NOACTIVATE);
         app.tool = Tool::Select;
         app.document.selected = 0;
         app.inspectorScroll = 0;
         saveBytes(L"ui-editor.png", app.graphics.png(renderEditorPreview()));
+        command(InterfaceClassic);
+        saveBytes(L"ui-top-editor.png", app.graphics.png(renderEditorPreview()));
+        command(InterfaceOrange);
         // A large custom palette can be scrolled without changing the screenshot geometry.
         for (int i = 0; i < 56; ++i)
             app.palette.push_back(rgb(i * 3, i * 2, i));
@@ -256,14 +481,66 @@ int wmain()
         require(canvasRect().right == clientDips().right,
                 "Closing inspector did not return canvas space.");
         command(ToggleFormatting);
+        // Both layouts use a white pulse over the source alpha, with no accent tint or frame.
+        app.image = Bitmap::create(160, 120);
+        for (size_t i = 0; i < app.image.pixels.size(); i += 4)
+        {
+            app.image.pixels[i] = 40;
+            app.image.pixels[i + 1] = 65;
+            app.image.pixels[i + 2] = 100;
+            app.image.pixels[i + 3] = 255;
+        }
+        app.document.clear();
+        app.exportOptions.professionalBorder = true;
+        app.exportOptions.professionalBlur = true;
+        app.exportOptions.professionalRounded = true;
+        resetPreview();
+        for (int layout : {InterfaceClassic, InterfaceOrange})
+        {
+            command(layout);
+            const auto exported = renderedExport();
+            const auto before = renderEditorPreview();
+            app.copyFlashStarted = GetTickCount64();
+            const auto flashed = renderEditorPreview();
+            auto sample = [&](Point p, int channel) {
+                p = app.view.toScreen(p) * app.dpi;
+                const size_t i =
+                    (static_cast<size_t>(p.y) * before.width + static_cast<int>(p.x)) * 4;
+                return std::pair{before.pixels[i + channel], flashed.pixels[i + channel]};
+            };
+            std::array<float, 3> alpha{};
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                const auto [a, b] = sample({80, 60}, channel);
+                require(b > a, "Copy did not flash the image.");
+                alpha[channel] = (b - a) / float(255 - a);
+                const auto [outsideBefore, outsideAfter] = sample({-18, -18}, channel);
+                require(outsideBefore == outsideAfter, "Copy flashed transparent border padding.");
+            }
+            require(std::abs(alpha[0] - alpha[1]) < .02f && std::abs(alpha[1] - alpha[2]) < .02f,
+                    "Copy pulse has a color tint.");
+            require(renderedExport().pixels == exported.pixels,
+                    "Copy pulse changed exported pixels.");
+            app.copyFlashStarted = GetTickCount64() - 400;
+            SendMessageW(app.window, WM_TIMER, CopyFlashTimer, 0);
+            require(!app.copyFlashStarted && renderEditorPreview().pixels == before.pixels,
+                    "Copy pulse did not disappear cleanly.");
+            saveBytes(app.classicUI ? L"ui-top-copy.png" : L"ui-side-copy.png",
+                      app.graphics.png(flashed));
+        }
         app.image = {};
         app.document.clear();
         app.tool = Tool::Select;
         saveBytes(L"ui-empty.png", app.graphics.png(renderEditorPreview()));
-        std::cout << "PASS: complete settings/menus and repeated gear popup, native UI layout at "
-                     "100/150/200% DPI, compact bounds, preset/custom "
-                     "stroke sizes, single-step undo/redo, cancellation, opacity export/PNG, "
-                     "in-place style edits, viewport stability, scrolling and collapse.\n";
+        std::cout
+            << "PASS: complete modern settings/menus, overlay input isolation and shortcut recording, "
+               "four colors and light/dark in both layouts with identical exports, theme persistence, "
+               "compact scrolling settings at each DPI; native UI layout at "
+               "100/150/200% DPI, compact bounds, preset/custom "
+               "stroke sizes, single-step undo/redo, cancellation, opacity export/PNG, "
+               "in-place style edits, viewport stability, scrolling and collapse; live toolbar "
+               "layout switching/persistence/fullscreen, both layouts at each DPI, neutral "
+               "alpha-masked copy pulse with unchanged exports.\n";
     }
     catch (const std::exception &e)
     {

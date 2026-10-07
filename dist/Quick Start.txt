@@ -61,7 +61,12 @@ Check: choose boxed, circle-badge, or simple green checks and red Xs from its dr
 Click to place or drag to size. Switching checks/Xs picks green/red; colors can be customized.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
-Tools are in the left rail. Plain letter keys do not activate tools. Line and Check/X keep their own controls.
+Settings > Toolbar layout switches between Top toolbars and Side panels immediately.
+Top toolbars uses the original ribbon and menu bar; Side panels uses the left rail and right properties panel.
+The choice and each layout's collapsed controls are remembered separately.
+Switching retains your snip, annotations, selection, crop, and undo history.
+The controls below describe Side panels; Top toolbars keeps the original controls above the image.
+Plain letter keys do not activate tools. Line and Check/X keep their own controls.
 The right properties panel follows the current tool or selected annotation.
 Its visual style picker retains all circle, rectangle, arrow, check/X and line presets.
 Use each tool's small chevron for quick access to its presets.
@@ -72,9 +77,15 @@ Esc or loss of pointer capture cancels the drag and restores the previous size.
 Opacity adjusts the selected annotation or the next mark, including Copy and Save.
 Highlights retain their existing translucent blending beneath the opacity setting.
 Undo/redo is beside New snip; Copy and Save are at the top right.
-A successful Copy or Ctrl+C briefly flashes the image, fading out in 280 ms.
+A successful Copy or Ctrl+C briefly brightens the image with a white pulse, fading out in 280 ms.
+The pulse follows image transparency and adds no colored tint or outline.
 The flash stays in the editor and never appears in copied or saved pixels.
-The Settings gear or F10 opens File, Edit, View, Settings and Help.
+The Settings gear or F10 opens the modern settings panel in Side panels.
+Appearance offers Top toolbars or Side panels, four color themes (Purple, Orange,
+Blue and Teal), and Light or Dark. Colors work with either layout and do not alter exports.
+General, Capture, Export and View keep every original setting; Actions offers app commands.
+Settings save automatically. Esc or Done closes the panel. Scroll shorter panels;
+Tab and Enter navigate controls. Top toolbars retains its native menu bar.
 Use View to show/hide the command bar, tool rail, or properties panel.
 The properties panel's X closes it; its edge chevron reopens it.
 The properties panel scrolls when a large palette or short window needs more room.
@@ -94,16 +105,19 @@ Highlight width, text size, and each tool's opacity are saved separately.
 Text also remembers font size, bold, and the rounded Box setting.
 Preferences save on close/exit only. New captures still start with Pen.
 
-Settings > Keyboard shortcuts lets you set two independent global shortcuts.
+Capture in the modern settings panel lets you set two independent global shortcuts.
+Top toolbars also offers Settings > Keyboard shortcuts.
 Select an area: Ctrl+Alt+S by default, followed by click-and-drag selection.
 Instant capture: Ctrl+Alt+F by default, opens all monitors and the pointer in the editor.
 Hover a menu and press either shortcut: the screen freezes before focus changes.
 Keep the app running for the shortcuts. Backspace disables either one independently.
-Pause works by itself: focus a shortcut field, press Pause/Break, then Save.
+Pause works by itself: click a shortcut and press Pause/Break. Esc cancels recording.
+The original shortcut dialog in Top toolbars uses its Save button.
 Other shortcuts need Ctrl or Alt; F12 is reserved.
 File and the tray menu also offer Capture all monitors now.
 
-Settings > Rendering... lets you switch how Tiger Snip draws its window.
+General > Software rendering in Side panels switches immediately and saves the choice.
+Top toolbars offers Settings > Rendering... to switch how Tiger Snip draws its window.
 Check Use software rendering (compatibility mode) if resizing or maximizing
 freezes the window, leaves stale content, or takes seconds to redraw.
 Leave it unchecked for hardware acceleration, the default for most PCs.

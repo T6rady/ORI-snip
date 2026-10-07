@@ -37,18 +37,18 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
 {
     const auto client = clientDips(), canvas = canvasRect();
     const auto l = inspectorLayout();
-    const Color white = rgb(255, 255, 255), edge = rgb(224, 228, 233), peach = rgb(255, 239, 225);
+    const Color white = uiSurface(), edge = uiBorder(), peach = uiSelected();
     auto fill = [&](Rect r, Color c) {
-        brush->SetColor(color(c));
+        brush->SetColor(color(themeSurfaceColor(c)));
         rt->FillRectangle({r.left, r.top, r.right, r.bottom}, brush);
     };
     auto surface = [&](Rect r, Color c, bool outline = false, Color border = rgb(216, 222, 230)) {
         auto box = D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, 5, 5);
-        brush->SetColor(color(c));
+        brush->SetColor(color(themeSurfaceColor(c)));
         rt->FillRoundedRectangle(box, brush);
         if (outline)
         {
-            brush->SetColor(color(border));
+            brush->SetColor(color(themeSurfaceColor(border)));
             rt->DrawRoundedRectangle(box, brush, 1);
         }
     };
@@ -217,6 +217,8 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
     }
     for (size_t i = 0; i < app.buttons.size(); ++i)
     {
+        if (app.settingsPanelOpen && i >= app.settingsButtonsStart)
+            continue;
         const auto &b = app.buttons[i];
         if (recentPanelCommand(b.command) || curvedArrowCommand(b.command))
             continue;
@@ -228,7 +230,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         if (property)
             rt->PushAxisAlignedClip({l.body.left, l.body.top, l.body.right, l.body.bottom},
                                     D2D1_ANTIALIAS_MODE_ALIASED);
-        Color fg = available ? Ink : rgb(175, 182, 192);
+        Color fg = available ? Ink : Muted;
         bool on = active(b.command);
         const bool rail =
             !app.fullScreen && railCommand(b.command) && r.left < 76 && r.top >= toolbarHeight();
@@ -259,8 +261,13 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
             const Color c =
                 paletteCommand(b.command) ? app.palette[b.command - ColorFirst] : activeColor();
             const bool chosen = c == activeColor();
-            surface({r.left + 2, r.top + 2, r.right - 2, r.bottom - 2}, c, true,
-                    c == white ? rgb(197, 205, 215) : c);
+            // Palette swatches show actual annotation colors, even in Dark.
+            const auto swatch = D2D1::RoundedRect(
+                {r.left + 2, r.top + 2, r.right - 2, r.bottom - 2}, 6, 6);
+            brush->SetColor(color(c));
+            rt->FillRoundedRectangle(swatch, brush);
+            brush->SetColor(color(c == rgb(255, 255, 255) ? uiBorder() : c));
+            rt->DrawRoundedRectangle(swatch, brush, 1);
             if (chosen && paletteCommand(b.command))
             {
                 brush->SetColor(color(Accent));
@@ -283,7 +290,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
             fill({r.left, cy - 1.5f, cx, cy + 1.5f}, available ? Accent : edge);
             brush->SetColor(color(white));
             rt->FillEllipse(D2D1::Ellipse({cx, cy}, 6, 6), brush);
-            brush->SetColor(color(available ? Accent : rgb(190, 198, 209)));
+            brush->SetColor(color(available ? Accent : Muted));
             rt->DrawEllipse(D2D1::Ellipse({cx, cy}, 6, 6), brush, hover || down ? 2.5f : 2);
         }
         else if (b.command >= StrokePresetFirst && b.command <= StrokePresetThird)
@@ -294,7 +301,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                     chosen  ? peach
                     : hover ? rgb(247, 248, 250)
                             : white,
-                    true, chosen ? rgb(255, 194, 143) : edge);
+                    true, chosen ? uiSelectedBorder() : edge);
             text(std::to_wstring(px) + L" px", r, fg, app.graphics.smallFont.get(), true);
         }
         else if (b.command >= CircleStyleMenu && b.command <= LineStyleMenu)
@@ -348,7 +355,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                 const Color bg = !available ? rgb(229, 232, 237)
                                  : down     ? rgb(14, 19, 26)
                                  : hover    ? rgb(49, 58, 69)
-                                            : Ink;
+                                            : uiPrimary();
                 if ((b.command == NewSnip && r.top < toolbarHeight()) || b.command == CaptureMenu)
                 {
                     rt->PushAxisAlignedClip({r.left, r.top, r.right, r.bottom},
@@ -360,14 +367,14 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                 }
                 else
                     surface(r, bg);
-                fg = available ? white : Muted;
+                fg = available ? rgb(255, 255, 255) : Muted;
             }
             else if (outlined || on || hover)
                 surface(r,
                         on      ? peach
                         : hover ? rgb(245, 247, 249)
                                 : white,
-                        outlined, on ? rgb(255, 194, 143) : edge);
+                        outlined, on ? uiSelectedBorder() : edge);
             if (b.command == CaptureMenu)
                 chevron({(r.left + r.right) / 2, (r.top + r.bottom) / 2}, fg);
             else if (b.command == NewSnip || b.command == Copy || b.command == Save ||
@@ -407,7 +414,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         if (b.command >= CircleStyleMenu && b.command <= LineStyleMenu &&
             b.rect.right <= canvas.left)
             chevron({(b.rect.left + b.rect.right) / 2, (b.rect.top + b.rect.bottom) / 2},
-                    enabled(b.command) ? Muted : rgb(175, 182, 192));
+                    enabled(b.command) ? Muted : Muted);
     const float y = client.bottom - StatusHeight;
     std::wstring info = app.status.empty() ? hasImage()
                                                  ? std::to_wstring(app.image.width) + L" \u00D7 " +

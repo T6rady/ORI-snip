@@ -162,6 +162,7 @@ Soft watermarks are faint monochrome marks without a card or orange underline.
 They adapt to light/dark backgrounds; a subtle edge halo keeps the artwork visible.
 All logos are smaller, with the watermarks more compact than the white badges.
 The bottom-right logo scales with the snip and works with or without Professional Border.
+Small snips keep a recognizable minimum logo size; very tiny or narrow snips limit its footprint.
 Enabled and selected style are remembered on close/exit; the preview shows/hides the logo immediately.
 
 Recent keeps the last 10 captures, including the current one, in this PC's memory.

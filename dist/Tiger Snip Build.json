@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
-  "builtAtUtc": "2026-10-07T13:22:40Z",
-  "sourceBaseCommit": "45eda64257d9445372deca7f4724727d0bd91bff",
+  "builtAtUtc": "2026-10-07T13:56:59Z",
+  "sourceBaseCommit": "70e6930297eab2184769809bcc0ee35ec2f7fbc1",
   "workingTreeHasUncommittedChanges": true,
   "compilerVersion": [
     "clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)",
@@ -75,7 +75,7 @@
   "powershellVersion": "7.6.5",
   "output": {
     "name": "Tiger Snip.exe",
-    "sha256": "2F77CFE61928DF1A69EDE094356CA4B291FBC69C2F2F2E3A903BC1615AC0326F"
+    "sha256": "BCEC890A0F889179EC8DC99EC408CC8DD877B84B8D9EC0449FD006F1E1461087"
   },
   "inputs": [
     {
@@ -200,7 +200,7 @@
     },
     {
       "path": "src\\graphics.cpp",
-      "sha256": "7EBC298AF59FB38324D725CE5193DA9F309D732F16FC47DFAE49CDD7A1B53B4A"
+      "sha256": "D60821B7BB554CF796FF3DED3FC051A63F046D1F4AD86D8D76A65208942E6852"
     },
     {
       "path": "src\\graphics.h",

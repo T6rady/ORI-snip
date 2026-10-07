@@ -545,12 +545,19 @@ Rect Graphics::samtecLogoBounds(const Bitmap &image, uint8_t style)
         std::min(std::max(1, static_cast<int>(std::lround(side * .025))), (side - 1) / 2);
     auto master = samtecBadge(style);
     constexpr double fractions[] = {.09, .075, .085, .07, .055, .05};
+    constexpr int minHeights[] = {32, 26, 32, 26, 22, 20};
     constexpr int maxHeights[] = {80, 64, 80, 64, 52, 44};
     const int desiredHeight =
-        std::clamp(static_cast<int>(std::lround(side * fractions[style])), 1, maxHeights[style]);
+        std::clamp(static_cast<int>(std::lround(side * fractions[style])), minHeights[style],
+                   maxHeights[style]);
+    // Keep small marks recognizable, but limit their footprint on tiny/narrow captures.
+    const double availableWidth = std::min(double(image.width - margin * 2),
+                                           std::max(1.0, image.width * .35));
+    const double availableHeight = std::min(double(image.height - margin * 2),
+                                            std::max(1.0, image.height * .30));
     const double scale = std::min({double(desiredHeight) / master.height,
-                                   double(image.width - margin * 2) / master.width,
-                                   double(image.height - margin * 2) / master.height});
+                                   availableWidth / master.width,
+                                   availableHeight / master.height});
     const int width = std::max(1, static_cast<int>(std::lround(master.width * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(master.height * scale)));
     const int left = image.width - margin - width, top = image.height - margin - height;
@@ -1190,7 +1197,7 @@ void Graphics::test()
                 if (std::memcmp(&screenshot.pixels[i], &branded.pixels[i], 4))
                 {
                     ++changed;
-                    if (x < side * .80 || y < side * .80 || x == side - 1 || y == side - 1 ||
+                    if (x < side * .60 || y < side * .65 || x == side - 1 || y == side - 1 ||
                         branded.pixels[i + 3] != 255 || branded.pixels[i + 2] < 8)
                         throw std::runtime_error(
                             "Samtec watermark was misplaced, opaque, or changed image alpha.");
@@ -1239,6 +1246,52 @@ void Graphics::test()
                 "Tiger or wordmark lost its transparent cutouts or proportions.");
         saveBytes(mark == 1 ? L"samtec-tiger-transparent.png" : L"samtec-wordmark-transparent.png",
                   png(asset));
+    }
+    for (uint8_t style = 0; style < 6; ++style)
+    {
+        for (auto size : {std::pair{266, 111}, std::pair{160, 80}, std::pair{40, 40},
+                          std::pair{24, 240}, std::pair{240, 24}, std::pair{1, 1}})
+        {
+            const auto source = Bitmap::create(size.first, size.second);
+            const auto bounds = samtecLogoBounds(source, style);
+            if (bounds.left < 0 || bounds.top < 0 || bounds.right > source.width ||
+                bounds.bottom > source.height || bounds.width() > source.width * .35f + 1 ||
+                bounds.height() > source.height * .30f + 1)
+                throw std::runtime_error("A small-snippet logo covers too much content or escapes the image.");
+            if (size.first == 266 && size.second == 111 &&
+                bounds.height() < (style < 4 ? (style % 2 ? 24 : 30) : 18))
+                throw std::runtime_error("A small-snippet logo shrank below recognizable size.");
+        }
+        for (bool dark : {false, true})
+        {
+            auto source = Bitmap::create(266, 111);
+            const Color background = dark ? rgb(45, 50, 60) : rgb(248, 249, 251);
+            for (size_t i = 0; i < source.pixels.size(); i += 4)
+            {
+                source.pixels[i] = (background >> 16) & 255;
+                source.pixels[i + 1] = (background >> 8) & 255;
+                source.pixels[i + 2] = background & 255;
+                source.pixels[i + 3] = 255;
+            }
+            Annotation text;
+            text.kind = Tool::Text;
+            text.a = {12, 12};
+            text.fontSize = 13;
+            text.color = dark ? rgb(233, 237, 244) : rgb(32, 38, 46);
+            text.text = L"Preferences reset.\nDefault tools and colors.\nReady to take a snip.";
+            measureText(text);
+            const auto plain = flatten(source, {text});
+            const auto branded = exportImage(source, {text}, {false, true, style});
+            int recognizablePixels = 0;
+            for (size_t i = 0; i < branded.pixels.size(); i += 4)
+                recognizablePixels += std::abs(int(branded.pixels[i]) - int(plain.pixels[i])) >= 25;
+            if (recognizablePixels < 40 || branded.width != source.width ||
+                branded.height != source.height || decode(png(branded)).pixels != branded.pixels)
+                throw std::runtime_error("A small-snippet logo is unreadable or changed export dimensions.");
+            saveBytes(L"samtec-small-style-" + std::to_wstring(style + 1) +
+                          (dark ? L"-dark.png" : L"-light.png"),
+                      png(exportImage(source, {text}, {true, true, style})));
+        }
     }
     auto stylesPreview = Bitmap::create(1680, 1920);
     std::fill(stylesPreview.pixels.begin(), stylesPreview.pixels.end(), 255);

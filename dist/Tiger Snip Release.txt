@@ -1,5 +1,5 @@
 Tiger Snip 1.0.2 release information
-Packaged: 2026-10-07 13:22:41 UTC
+Packaged: 2026-10-07 13:58:54 UTC
 Distribution file: Tiger Snip Setup.msi
 Installation: current user; local app and Start menu shortcut; no automatic startup.
 Interactive setup: success confirmation; Launch Tiger Snip checked by default on Finish.
@@ -7,19 +7,19 @@ Silent/basic-UI setup, repair, and removal do not launch the app.
 Settings: current user LocalAppData; personal preferences are excluded from this package.
 Build: C++20, static runtime; package authored with Windows Installer and makecab.
 Compiler: clang version 23.1.2 (https://github.com/llvm/llvm-project.git 85ac560262434c9ccfc0c183ec22d4138ed647fb)
-Executable built: 10/07/2026 13:22:40
+Executable built: 10/07/2026 13:56:59
 Build record: Tiger Snip Build.json (compiler/tool hashes, options, source-input and EXE hashes).
 Validated toolchain provenance: BUILD-TOOLCHAIN.md in the source repository.
 Signing: unsigned. IT deployment policy remains to be validated.
-Source base commit at build time: 45eda64257d9445372deca7f4724727d0bd91bff
+Source base commit at build time: 70e6930297eab2184769809bcc0ee35ec2f7fbc1
 Working tree had uncommitted changes at build time: True
 A source archive without Git metadata records those fields as unknown; input hashes still identify the actual files.
 
 SHA256:
-8057120066F7BAB32A5938397495D4A386A413A60AD877A4A12436562CE85237  Tiger Snip Setup.msi
-B3E246EADDED9914E8AD6B64252C5677457CF02AC8E38D78B950207CD7709C33  Tiger Snip Build.json
-2F77CFE61928DF1A69EDE094356CA4B291FBC69C2F2F2E3A903BC1615AC0326F  Tiger Snip.exe
-553450C6B04955556B71E27E40BD7A10FF87237315DE2B077BB387ABFAB00338  Quick Start.txt
+A73AD0B54EF851DC45B34C9D7978BC049395F1F094A6E866A8AA1280CD4BA80B  Tiger Snip Setup.msi
+5F2E5F9002A919193D9D7EEC542962CF55348F43E1C55CA5BD5072E6F8FE5E0C  Tiger Snip Build.json
+BCEC890A0F889179EC8DC99EC408CC8DD877B84B8D9EC0449FD006F1E1461087  Tiger Snip.exe
+BE8876FF90DAB6E7C1D45E86813A1297C8267E1E6ED1BC96FBCD7D54908CC127  Quick Start.txt
 8D85C1057D742E597985C7D4E6320B015A9139385CFF4CBAE06FFC0EBE89AFEE  LLVM.txt
 1DB8DA07B436C68833C0673FFEE3D9FCB2526047F3820B81661865DFEDC79A1F  MinGW-runtime.txt
 
@@ -45,7 +45,7 @@ C870ABE68D31880D9CD9AD45C322E7CB6754B636063A34303DB9072499281845  src\editor_set
 22BA924E2686E95C77ABB061BC1A9116A2DAD974474AC41141376AF995A1A453  src\editor_theme.h
 D061FB7C2488ABB6C756C34823336BC91063A37A8D78E4802DDA2013682A2C41  src\file_io.cpp
 5589A7ABA5C067547A022229C4ACA61C567A591296325A3B922914A0C35C05F7  src\file_io.h
-7EBC298AF59FB38324D725CE5193DA9F309D732F16FC47DFAE49CDD7A1B53B4A  src\graphics.cpp
+D60821B7BB554CF796FF3DED3FC051A63F046D1F4AD86D8D76A65208942E6852  src\graphics.cpp
 F242898BC1F8A176CC10C3C8ECAF193DDB1A1D5526907283B4519FAE4FC0978D  src\graphics.h
 391BAE444D4197A8E0F930C1ECCBD692EA177A792EFE932B9FAE1B2CF65FC6A5  src\main.cpp
 FDFAA797512391B761AED4FA9DAB27E45B69C550FE0EAB178FEE95334A7FE48A  src\model.cpp

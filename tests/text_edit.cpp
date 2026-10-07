@@ -253,6 +253,155 @@ int wmain()
         require(!app.textEditBacking && !app.textEditTarget && !app.textEditDisplay &&
                     !app.textEditWorkspace,
                 "Editing-session resources were not released.");
+        // Text edges reflow/resize its frame independently; corners retain font scaling.
+        auto lineCount = [&](const Annotation &item) {
+            auto layout = app.graphics.textLayout(item);
+            DWRITE_TEXT_METRICS metrics{};
+            check(layout->GetMetrics(&metrics), "Cannot inspect text wrapping.");
+            return metrics.lineCount;
+        };
+        auto mouse = [&](Point p) {
+            const auto screen = app.view.toScreen(p) * app.dpi;
+            return MAKELPARAM(static_cast<int>(std::lround(screen.x)),
+                             static_cast<int>(std::lround(screen.y)));
+        };
+        auto dragTextEdge = [&](int handle, Point delta, bool cancel = false) {
+            const auto start = handles(app.document.items[0])[handle];
+            mouseDown(mouse(start));
+            require(app.drag == Drag::Resize && app.handle == handle &&
+                        GetCapture() == app.window && app.document.editing(),
+                    "Text edge did not start a resize transaction.");
+            mouseMove(mouse(start + delta * .5f));
+            mouseMove(mouse(start + delta));
+            if (cancel)
+                processKey(VK_ESCAPE);
+            else
+                mouseUp(mouse(start + delta));
+            require(app.drag == Drag::None && GetCapture() != app.window && !app.document.editing(),
+                    "Text resizing leaked capture or a history transaction.");
+        };
+        for (int layout : {InterfaceClassic, InterfaceOrange})
+            for (float dpi : {1.0f, 1.5f, 2.0f})
+                for (bool boxed : {false, true})
+                {
+                    command(layout);
+                    app.dpi = dpi;
+                    SetWindowPos(app.window, nullptr, 0, 0, static_cast<int>(1050 * dpi),
+                                 static_cast<int>(740 * dpi), SWP_NOZORDER | SWP_NOACTIVATE);
+                    app.fit = true;
+                    app.tool = Tool::Select;
+                    app.document.clear();
+                    Annotation wrapped;
+                    wrapped.kind = Tool::Text;
+                    wrapped.a = {60, 60};
+                    wrapped.text = L"this is how test works";
+                    wrapped.fontSize = 32;
+                    wrapped.textWidth = 140;
+                    wrapped.bold = true;
+                    wrapped.boxed = boxed;
+                    app.graphics.measureText(wrapped);
+                    require(lineCount(wrapped) > 1, "Text resize fixture did not wrap.");
+                    app.document.items = {wrapped};
+                    app.document.selected = 0;
+                    resetPreview();
+                    updateView();
+                    buildButtons();
+                    const auto pixels = app.image.pixels;
+                    const auto toolColors = app.colors;
+                    const float fontPreference = app.fontSize;
+                    const auto initial = app.graphics.flatten(app.image, {wrapped});
+                    const auto centerRight = app.view.toScreen(handles(wrapped)[5]);
+                    require(editorCursor(centerRight) == LoadCursorW(nullptr, IDC_SIZEWE),
+                            "Text width handle did not show a horizontal resize cursor.");
+                    dragTextEdge(5, {440, 80});
+                    const auto wide = app.document.items[0];
+                    require(wide.textFrame && wide.fontSize == wrapped.fontSize &&
+                                wide.text == wrapped.text && wide.color == wrapped.color &&
+                                wide.bold == wrapped.bold && wide.boxed == boxed &&
+                                wide.a == wrapped.a && lineCount(wide) == 1 &&
+                                wide.bounds().height() < wrapped.bounds().height() &&
+                                std::abs(wide.bounds().width() - wrapped.bounds().width() - 440) <
+                                    3,
+                            "Widening a text box scaled the font, moved its anchor or failed to "
+                            "rewrap.");
+                    const auto wideExport = app.graphics.flatten(app.image, {wide});
+                    require(wideExport.pixels != initial.pixels &&
+                                previewImage().pixels == renderedExport().pixels &&
+                                app.graphics.decode(app.graphics.png(wideExport)).pixels ==
+                                    wideExport.pixels,
+                            "Text width changes were missing from cached preview or PNG export.");
+                    if (dpi == 1 && boxed)
+                    {
+                        saveBytes(app.classicUI ? L"text-top-reflow.png" : L"text-side-reflow.png",
+                                  app.graphics.png(renderEditorPreview()));
+                        saveBytes(app.classicUI ? L"text-top-reflow-export.png"
+                                                : L"text-side-reflow-export.png",
+                                  app.graphics.png(wideExport));
+                    }
+                    require(app.document.undo() && app.document.items[0] == wrapped &&
+                                !app.document.canUndo(),
+                            "A text width drag was not one undo step.");
+                    require(app.document.redo() && app.document.items[0] == wide,
+                            "Text width redo did not restore the frame and wrapping.");
+                    app.document.selected = 0;
+                    dragTextEdge(7, {-30, -80});
+                    auto left = app.document.items[0];
+                    require(std::abs(left.b.x - wide.b.x) < .01f && left.a.y == wide.a.y &&
+                                left.fontSize == wide.fontSize && lineCount(left) == 1,
+                            "Left text handle did not keep the right edge and font anchored.");
+                    require(app.document.undo(), "Cannot undo left text resize.");
+                    app.document.selected = 0;
+                    dragTextEdge(6, {80, 100});
+                    auto taller = app.document.items[0];
+                    require(taller.a == wide.a && taller.b.x == wide.b.x &&
+                                taller.fontSize == wide.fontSize && lineCount(taller) == 1 &&
+                                std::abs(taller.bounds().height() - wide.bounds().height() - 100) <
+                                    3,
+                            "Bottom text handle stretched the text or changed width.");
+                    require(app.document.undo(), "Cannot undo bottom text resize.");
+                    app.document.selected = 0;
+                    dragTextEdge(4, {-80, -60});
+                    auto top = app.document.items[0];
+                    require(std::abs(top.b.y - wide.b.y) < .01f && top.a.x == wide.a.x &&
+                                top.b.x == wide.b.x && top.fontSize == wide.fontSize,
+                            "Top text handle did not keep the bottom edge and width anchored.");
+                    require(app.document.undo(), "Cannot undo top text resize.");
+                    app.document.selected = 0;
+                    dragTextEdge(5, {-400, 0}, true);
+                    require(app.document.items[0] == wide,
+                            "Canceling text reflow did not restore the original frame.");
+                    dragTextEdge(5, {-420, 0});
+                    auto narrow = app.document.items[0];
+                    require(narrow.fontSize == wide.fontSize && lineCount(narrow) > 1 &&
+                                narrow.bounds().height() > wide.bounds().height(),
+                            "Narrowing text did not wrap and grow vertically.");
+                    dragTextEdge(6, {0, -1000});
+                    require(app.document.items[0].bounds().height() >=
+                                narrow.bounds().height() - .01f,
+                            "Shrinking a text frame clipped away lines.");
+                    beginTextEditing({}, 0);
+                    require(app.textEdit, "Cannot edit independently resized text.");
+                    SendMessageW(app.textEdit, WM_CHAR, L'!', 0);
+                    verify(L"resized-text-" + std::to_wstring(layout) + L"-" +
+                           std::to_wstring(static_cast<int>(dpi * 100)) +
+                           (boxed ? L"-box" : L"-plain"));
+                    finishTextEditing();
+                    require(app.document.items[0].textFrame &&
+                                app.document.items[0].text.back() == L'!',
+                            "Editing discarded the explicit text frame.");
+                    require(app.image.pixels == pixels && app.colors == toolColors &&
+                                app.fontSize == fontPreference,
+                            "Text frame resizing changed screenshot pixels or drawing defaults.");
+                }
+        // Explicit Enter/newline characters stay explicit even when the frame is widened.
+        app.dpi = 1;
+        app.document.items[0].text = L"First line\r\nSecond line";
+        app.graphics.measureText(app.document.items[0]);
+        app.document.selected = 0;
+        dragTextEdge(5, {400, 0});
+        require(lineCount(app.document.items[0]) == 2 &&
+                    app.document.items[0].text == L"First line\r\nSecond line",
+                "Text reflow removed explicit line breaks.");
         std::cout << "PASS\n";
     }
     catch (const std::exception &exception)

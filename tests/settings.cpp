@@ -12,7 +12,8 @@ int wmain()
     const auto second = root / L"second" / L"Tiger Snip" / L"TigerSnip.ini";
     const auto third = root / L"third" / L"Tiger Snip" / L"TigerSnip.ini";
     auto require = [](bool ok, const char *message) {
-        if (!ok) throw std::runtime_error(message);
+        if (!ok) throw std::runtime_error(std::string(message) +
+                                         (app.preferenceError.empty() ? "" : " " + app.preferenceError));
     };
     int result = 0;
     try
@@ -22,6 +23,10 @@ int wmain()
                 "Cannot create portable preferences.");
         require(WritePrivateProfileStringW(L"Settings", L"AutoCopy", L"0", portable.c_str()),
                 "Cannot create portable auto-copy preference.");
+        require(WritePrivateProfileStringW(L"Settings", L"ToolbarLayout", L"0", portable.c_str()),
+                "Cannot create an existing classic UI preference.");
+        require(WritePrivateProfileStringW(L"Settings", L"ColorTheme", L"1", portable.c_str()),
+                "Cannot create an existing Orange theme preference.");
         require(WritePrivateProfileStringW(L"ToolPreferences", L"StrokeWidth", L"13", portable.c_str()),
                 "Cannot create portable stroke preference.");
         require(SetFileAttributesW(portable.c_str(), FILE_ATTRIBUTE_READONLY),
@@ -30,11 +35,16 @@ int wmain()
                 "Preferences must be under the requested user's profile.");
         app.iniPath = first.wstring();
         loadToolPreferences();
-        require(app.softwareRendering && !app.autoCopy && app.thickness == 13,
+        require(app.softwareRendering && !app.autoCopy && app.thickness == 13 && app.classicUI,
                 "Migration must preserve this PC's renderer and personal tool preferences.");
+        require(app.colorTheme == 0 && app.appearancePreferencesDirty,
+                "The retired Orange preset must migrate to Purple.");
         app.thickness = 17;
         app.toolPreferencesDirty = true;
         require(saveToolPreferences(), "Migrated personal preferences must be writable.");
+        require(GetPrivateProfileIntW(L"Settings", L"ColorTheme", 99, first.c_str()) == 0 &&
+                    GetPrivateProfileIntW(L"Settings", L"ColorTheme", 99, portable.c_str()) == 1,
+                "Orange migration must persist without changing the read-only source.");
         settingsPathForProfile(root / L"first", portable);
         require(GetPrivateProfileIntW(L"ToolPreferences", L"StrokeWidth", 0, first.c_str()) == 17,
                 "A later launch must not overwrite existing personal preferences.");
@@ -45,6 +55,18 @@ int wmain()
         loadToolPreferences();
         require(!app.softwareRendering && app.autoCopy && app.thickness == 4,
                 "A fresh user must retain the ordinary renderer and tool defaults.");
+        require(!app.classicUI && app.colorTheme == 0 && !app.darkTheme,
+                "A fresh installation must default to the new UI with the Purple light theme.");
+        for (int theme : {2, 3, 4})
+        {
+            require(WritePrivateProfileStringW(L"Settings", L"ColorTheme",
+                                               std::to_wstring(theme).c_str(), second.c_str()) &&
+                        WritePrivateProfileStringW(L"Settings", L"CustomUIAccent", L"123456", second.c_str()),
+                    "Cannot create a retained color preference.");
+            loadToolPreferences();
+            require(app.colorTheme == static_cast<unsigned>(theme) && app.customUIAccent == 123456,
+                    "Removing Orange changed the stored Blue, Teal or Custom preference.");
+        }
         app.thickness = 23;
         app.toolPreferencesDirty = true;
         require(saveToolPreferences(), "The second profile must be writable.");

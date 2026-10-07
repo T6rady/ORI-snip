@@ -9,6 +9,8 @@ required by this installer; your organization's installation policies still appl
 The app is installed locally under %LOCALAPPDATA%\Programs\Tiger Snip.
 Personal settings are stored in %LOCALAPPDATA%\Tiger Snip\TigerSnip.ini.
 Each Windows user has their own settings. The installer includes no personal settings.
+Fresh installations use the new Side panels UI with the Purple light theme.
+Existing users keep their saved UI layout and colors.
 The standalone Tiger Snip.exe also runs directly and uses those same personal settings.
 Windows Installed apps can uninstall Tiger Snip; settings remain for reinstalling.
 To reset everything after uninstalling, delete %LOCALAPPDATA%\Tiger Snip.
@@ -20,7 +22,7 @@ New captures copy automatically by default. Settings > Auto copy new snips turns
 Ctrl+C copies the current image with all annotations, including edits made after capture.
 Ctrl+S saves a PNG; Ctrl+Shift+S chooses a new filename.
 Ctrl+Alt+F instantly captures all monitors and the mouse pointer, preserving hover menus.
-Click Crop beside the full-screen button (or press C), drag the part to keep, and release.
+Click Crop in the left tool rail, drag the part to keep, and release.
 Esc cancels cropping. Ctrl+Z restores the previous image; Ctrl+Y reapplies the crop.
 Annotations move with the crop. Copy and Save export just the cropped image.
 
@@ -30,70 +32,106 @@ Right-click any swatch to Edit color or Delete color. Keep four, ten, or more co
 larger palettes wrap onto extra rows. Your palette and order save on close/exit.
 Adding a color selects it; deleting a swatch leaves existing annotations unchanged.
 To keep an eyedropper color, click + and Add color. Cancel keeps the palette unchanged.
-Highlight: click Highlight or press H, then drag a translucent chisel brush.
+Highlight: click Highlight, then drag a translucent chisel brush.
 It starts yellow at 24 px wide. Color and width (4-80 px) save on close/exit,
 separately from Pen. Text stays visible beneath the highlight.
-In narrow windows, use the chisel icon between Pen and Text; hover for its hint.
+In short windows, tool labels collapse to icons; hover for hints and shortcuts.
 Select highlights to move, resize, recolor, or delete them. Undo/redo is supported.
-Eraser: click the eraser icon beside Text, press E, or choose Edit > Eraser.
+Eraser: click Erase in the left tool rail or choose Edit > Eraser.
 Click or drag over a mark to delete the entire drawn stroke or annotation.
 Erase an older mark while keeping newer marks elsewhere. At an overlap, a click
 removes the topmost annotation. One drag is one undo step; Ctrl+Z restores it.
-Esc during a drag cancels that erase. E again or another tool leaves eraser mode.
+Esc during a drag cancels that erase. Click Erase again or another tool to leave eraser mode.
 The ring cursor shows the contact area. Original screenshot pixels stay intact.
 Hold the size + or - button to quickly adjust brush or font size. Move off to pause; release to stop.
-Text: press T, click the image, and type. Size, B (bold), Box, and colors are in the toolbar.
+Text: click Text in the left tool rail, click the image, and type. Size, Bold, Box, and colors are in the properties panel.
 The typing field fits the text and shows the screenshot behind plain text, without an input bar.
 Text uses Bahnschrift, a clean modern typeface, with Segoe UI fallback if unavailable.
 Enter adds a line. Ctrl+Enter or clicking elsewhere finishes and returns to Select.
 Esc cancels. Select Text again to add another annotation; double-click text to edit it again.
-Select text to move it or drag its corners to scale it. Text edits support undo/redo.
-Eyedropper: click the pipette beside the colors (or press I), then click the image.
+Select text to move it. Drag a left/right middle handle to change the wrap width without
+changing the font size; widen it to put wrapped text on one line. Top/bottom middle handles
+adjust the box height without stretching text, with a minimum that keeps all lines visible.
+Corner handles still scale the font. Each resize is one undo step; Esc cancels the drag.
+Explicit line breaks stay on separate lines. Text edits support undo/redo.
+Eyedropper: click the pipette beside the colors, then click the image.
 It samples screenshot/annotation colors and can recolor a selected object. Esc cancels.
 Shapes: circles and squares share a menu with large visual style previews.
 Choose square, rounded square, highlight box, filled box, or one of the circle styles.
-Drag to create; hold Shift for a perfect circle/square. O repeats the last shape; R selects rectangle.
+Drag to create; hold Shift for a perfect circle/square. Click Shapes to repeat the last shape; choose rectangles in its style menu.
 Use the small arrow beside Shapes, Arrow, Check, and Line to choose a visual style.
 Arrows: classic, outlined with a black border, curved gloss, straight gloss, or block gloss.
 Block gloss has a wide straight shaft, square tail, triangular head, black border, and highlight.
-Line: solid, dashed, or dotted. Hold Shift to snap its angle; L selects Line.
+Line: solid, dashed, or dotted. Hold Shift to snap its angle; click Line in the left tool rail to select it.
 Check: choose boxed, circle-badge, or simple green checks and red Xs from its dropdown.
 Click to place or drag to size. Switching checks/Xs picks green/red; colors can be customized.
 Select: move stickers; drag corners to resize, or arrow/line endpoints to turn.
 Ctrl+Z / Ctrl+Y: undo / redo. Delete removes the selected annotation.
-Select/Pen/Highlight/Text and Shapes have separate toolbar groups, with shapes aligned to the right.
-Undo/redo sits beside New snip. Hover for hints and shortcuts.
-Color, stroke width, and zoom sit in their own row. Copy confirms with "Copied!".
-A successful Copy or Ctrl+C also briefly flashes the image, fading out in 280 ms.
+Settings > Toolbar layout switches between Top toolbars and Side panels immediately.
+Top toolbars uses the original ribbon and menu bar; Side panels uses the left rail and right properties panel.
+The choice and each layout's collapsed controls are remembered separately.
+Switching retains your snip, annotations, selection, crop, and undo history.
+The controls below describe Side panels; Top toolbars keeps the original controls above the image.
+Plain letter keys do not activate tools. Line and Check/X keep their own controls.
+The right properties panel follows the current tool or selected annotation.
+Its visual style picker retains all circle, rectangle, arrow, check/X and line presets.
+Use each tool's small chevron for quick access to its presets.
+Choosing a style in the properties panel updates the selected annotation in place.
+Stroke and font sizes have preset buttons, a pixel slider, and + / - controls.
+Stroke and highlight sliders stop at 40 px for finer control. Use + / - for larger sizes
+(up to 100 px for strokes, 80 px for highlights). Font sliders keep their full size range.
+A whole slider drag is one undo step.
+Esc or loss of pointer capture cancels the drag and restores the previous size.
+Opacity adjusts the selected annotation or the next mark, including Copy and Save.
+Highlights retain their existing translucent blending beneath the opacity setting.
+Undo/redo is beside New snip; Copy and Save are at the top right.
+A successful Copy or Ctrl+C brightens the image with a white pulse, fading out in 500 ms.
+"Copied to clipboard" stays visible for 1.4 seconds, including on light screenshots.
+The pulse follows image transparency and adds no colored tint or outline.
 The flash stays in the editor and never appears in copied or saved pixels.
-Use the small chevron at the far right of any toolbar row to collapse/expand it.
-Collapsed rows keep a slim labeled strip; the View menu can toggle them too.
-All three rows start expanded. Collapsed rows are remembered on close/exit.
+The Settings gear or F10 opens the full settings panel in either UI.
+In Top toolbars, Settings > Settings... opens the same panel.
+Appearance offers Classic UI (Top toolbars) or New UI (Side panels), three color themes (Purple,
+Blue and Teal), and Light or Dark. Colors work with either layout and do not alter exports.
+Custom color opens the spectrum, RGB and hex picker for your own UI accent.
+Apply color saves it immediately; Cancel keeps the previous theme. The custom color is
+remembered when you use another preset. Shades adapt to keep Light/Dark controls readable.
+Top toolbars offers the same picker through Settings > Color theme > Custom color.
+General, Capture, Export and View keep every original setting; Actions offers app commands.
+Settings save automatically. Esc or Done closes the panel. Scroll shorter panels;
+Tab and Enter navigate controls. Top toolbars retains its native menu bar.
+Use View to show/hide the command bar, tool rail, or properties panel.
+The properties panel's X closes it; its edge chevron reopens it.
+The properties panel scrolls when a large palette or short window needs more room.
+Chrome visibility is remembered on close/exit. The panel stays hidden without a capture.
 Mouse wheel zooms around the pointer, from the fitted minimum up to 800%.
 The percentage is actual pixel scale; the fitted minimum adjusts to the window.
 Use Select and drag the zoomed image with the hand cursor to pan.
 Annotation strokes and handles still move/resize annotations. Middle-drag or
 Space+drag also pan. Panning stops at image edges; fitting axes stay centered.
 Zooming fully out always centers the complete image. Fit returns to this view.
-F11 or the full-screen button beside Undo/Redo opens a full-screen screenshot view.
+F11 or View > Full screen opens a full-screen screenshot view.
 F11, Esc, or Exit full screen returns to the previous window and toolbar layout.
-Full screen retains Fit and 100% in a slim bottom strip.
+Full screen retains Recent, Fit and zoom controls in a slim bottom strip.
 Each tool remembers its own last color and style, including after File > Exit.
 Pen size (1-100 px, shared with shape strokes) is also remembered after restarting.
-Highlight width and text size are saved separately.
+Highlight width, text size, and each tool's opacity are saved separately.
 Text also remembers font size, bold, and the rounded Box setting.
 Preferences save on close/exit only. New captures still start with Pen.
 
-Settings > Keyboard shortcuts lets you set two independent global shortcuts.
+Capture in the modern settings panel lets you set two independent global shortcuts.
+Top toolbars also offers Settings > Keyboard shortcuts.
 Select an area: Ctrl+Alt+S by default, followed by click-and-drag selection.
 Instant capture: Ctrl+Alt+F by default, opens all monitors and the pointer in the editor.
 Hover a menu and press either shortcut: the screen freezes before focus changes.
 Keep the app running for the shortcuts. Backspace disables either one independently.
-Pause works by itself: focus a shortcut field, press Pause/Break, then Save.
+Pause works by itself: click a shortcut and press Pause/Break. Esc cancels recording.
+The original shortcut dialog in Top toolbars uses its Save button.
 Other shortcuts need Ctrl or Alt; F12 is reserved.
 File and the tray menu also offer Capture all monitors now.
 
-Settings > Rendering... lets you switch how Tiger Snip draws its window.
+General > Software rendering in Side panels switches immediately and saves the choice.
+Top toolbars offers Settings > Rendering... to switch how Tiger Snip draws its window.
 Check Use software rendering (compatibility mode) if resizing or maximizing
 freezes the window, leaves stale content, or takes seconds to redraw.
 Leave it unchecked for hardware acceleration, the default for most PCs.
@@ -107,7 +145,9 @@ New Save/Save As dialogs start there; you can still choose another destination.
 Ctrl+S on an already saved snip updates its existing file.
 
 Settings > Professional Border > Enabled is optional and OFF by default.
-Turning it on enables Blur and Rounded corners; uncheck either in the submenu to use the other alone.
+Blur and Rounded corners show OFF and are unavailable until Professional Border is on.
+Turning it on restores your saved choices (both effects are selected initially).
+Uncheck either in the submenu to use the other alone.
 It adds a soft gray halo without a hard outline and/or rounded corners to Copy and PNG Save.
 Blur adds 20 px transparent padding per side (40 px more in width/height).
 Rounded corners alone keep the original dimensions.
@@ -126,6 +166,9 @@ Enabled and selected style are remembered on close/exit; the preview shows/hides
 
 Recent keeps the last 10 captures, including the current one, in this PC's memory.
 Click Recent or press Ctrl+Shift+R to reopen a capture with its editable annotations.
+Right-click a recent thumbnail and choose Copy to copy it directly with its annotations
+and current export effects, keeping your current snip open. The welcome capture icon
+also starts a new snip when clicked.
 Closing the window leaves Tiger Snip in the tray and retains those captures.
 Closing, exiting, and taking a new snip happen immediately without a save prompt.
 Click the tray icon to snip. File > Exit quits entirely and clears the capture collection.

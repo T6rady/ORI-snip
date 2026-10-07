@@ -82,6 +82,7 @@ struct ColorPicker
 {
     Color value;
     bool editing = false, syncing = false;
+    const wchar_t *title = nullptr, *action = nullptr;
     float hue = 0, saturation = 0, brightness = 0;
     std::vector<uint32_t> spectrum;
     int spectrumWidth = 0, spectrumHeight = 0;
@@ -181,8 +182,8 @@ INT_PTR CALLBACK colorPickerProcedure(HWND window, UINT message, WPARAM wp, LPAR
                 picker = reinterpret_cast<ColorPicker *>(lp);
                 SetWindowLongPtrW(window, DWLP_USER, lp);
                 SetWindowTextW(window,
-                               picker->editing ? L"Edit palette color" : L"Add palette color");
-                SetDlgItemTextW(window, IDOK, picker->editing ? L"Save color" : L"Add color");
+                               picker->title ? picker->title : picker->editing ? L"Edit palette color" : L"Add palette color");
+                SetDlgItemTextW(window, IDOK, picker->action ? picker->action : picker->editing ? L"Save color" : L"Add color");
                 SendDlgItemMessageW(window, 11, EM_SETLIMITTEXT, 7, 0);
                 for (int id = 12; id <= 14; ++id)
                     SendDlgItemMessageW(window, id, EM_SETLIMITTEXT, 3, 0);
@@ -361,11 +362,13 @@ INT_PTR CALLBACK colorPickerProcedure(HWND window, UINT message, WPARAM wp, LPAR
         FALSE);
 }
 std::optional<Color> pickPaletteColor(HINSTANCE instance, HWND owner, Color value, bool editing,
-                                      void (*test)(HWND))
+                                      void (*test)(HWND), const wchar_t *title, const wchar_t *action)
 {
     ColorPicker picker{};
     picker.value = value;
     picker.editing = editing;
+    picker.title = title;
+    picker.action = action;
     picker.test = test;
     const auto result = DialogBoxParamW(instance, MAKEINTRESOURCEW(301), owner,
                                         colorPickerProcedure, reinterpret_cast<LPARAM>(&picker));

@@ -64,6 +64,16 @@ if ($Test) {
     $taskTextArguments[$taskTextArguments.IndexOf((Join-Path $taskBuild 'autocopy_test.exe'))] = Join-Path $taskBuild 'text_edit_test.exe'
     & $taskCompiler @taskTextArguments
     if ($LASTEXITCODE -ne 0) { throw 'Text editing test compilation failed.' }
+    $taskUIArguments = @($taskAutoCopyArguments)
+    $taskUIArguments[$taskUIArguments.IndexOf((Join-Path $taskRoot 'tests\autocopy.cpp'))] = Join-Path $taskRoot 'tests\ui.cpp'
+    $taskUIArguments[$taskUIArguments.IndexOf((Join-Path $taskBuild 'autocopy_test.exe'))] = Join-Path $taskBuild 'ui_test.exe'
+    & $taskCompiler @taskUIArguments
+    if ($LASTEXITCODE -ne 0) { throw 'UI test compilation failed.' }
+    $taskMenuArguments = @($taskUIArguments)
+    $taskMenuArguments[$taskMenuArguments.IndexOf((Join-Path $taskRoot 'tests\ui.cpp'))] = Join-Path $taskRoot 'tests\native_menu.cpp'
+    $taskMenuArguments[$taskMenuArguments.IndexOf((Join-Path $taskBuild 'ui_test.exe'))] = Join-Path $taskBuild 'native_menu_test.exe'
+    & $taskCompiler @taskMenuArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Native menu test compilation failed.' }
     $taskInstanceArguments = @($taskClipboardArguments)
     $taskInstanceArguments[$taskInstanceArguments.IndexOf((Join-Path $taskRoot 'tests\clipboard.cpp'))] = Join-Path $taskRoot 'tests\single_instance.cpp'
     $taskInstanceArguments[$taskInstanceArguments.IndexOf((Join-Path $taskBuild 'clipboard_test.exe'))] = Join-Path $taskBuild 'single_instance_test.exe'
@@ -90,6 +100,10 @@ if ($Test) {
         if ($LASTEXITCODE -ne 0) { throw 'Robustness test failed.' }
         & (Join-Path $taskBuild 'text_edit_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Text editing test failed.' }
+        & (Join-Path $taskBuild 'ui_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'UI test failed.' }
+        & (Join-Path $taskBuild 'native_menu_test.exe')
+        if ($LASTEXITCODE -ne 0) { throw 'Native menu frame test failed.' }
         & (Join-Path $taskBuild 'single_instance_test.exe')
         if ($LASTEXITCODE -ne 0) { throw 'Single-instance test failed.' }
         Write-Host "Test files: $taskRunRoot"

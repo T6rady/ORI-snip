@@ -2,6 +2,7 @@
 constexpr std::array<Color, 4> ThemeAccents = {ClassicAccent, OrangeAccent, rgb(37, 99, 235),
                                                rgb(0, 133, 119)};
 constexpr std::array<const wchar_t *, 4> ThemeNames = {L"Purple", L"Orange", L"Blue", L"Teal"};
+Color customSolidAccent = rgb(172, 73, 0);
 Color mixColor(Color a, Color b, float amount)
 {
     auto component = [&](int shift) {
@@ -40,8 +41,34 @@ Color uiPrimary()
 }
 Color uiSolidAccent()
 {
+    if (app.colorTheme == 4)
+        return customSolidAccent;
     // White labels need more contrast than the orange used for small accents.
     return app.colorTheme == 1 ? rgb(172, 73, 0) : ThemeAccents[app.colorTheme];
+}
+double colorLuminance(Color c)
+{
+    auto linear = [](unsigned value) {
+        const double v = value / 255.0;
+        return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4);
+    };
+    return .2126 * linear(c & 255) + .7152 * linear((c >> 8) & 255) +
+           .0722 * linear((c >> 16) & 255);
+}
+double colorContrast(Color a, Color b)
+{
+    const auto x = colorLuminance(a), y = colorLuminance(b);
+    return (std::max(x, y) + .05) / (std::min(x, y) + .05);
+}
+Color readableAccent(Color c, Color surface, Color toward, double minimum)
+{
+    for (int step = 0; step <= 20; ++step)
+    {
+        const auto shade = mixColor(c, toward, step / 20.0f);
+        if (colorContrast(shade, surface) >= minimum)
+            return shade;
+    }
+    return toward;
 }
 Color uiAccentText()
 {
@@ -80,10 +107,27 @@ Color themeSurfaceColor(Color c)
 }
 void updateInterfaceColors()
 {
-    Accent = ThemeAccents[app.colorTheme];
+    const Color base = app.colorTheme == 4 ? app.customUIAccent : ThemeAccents[app.colorTheme];
+    Accent = base;
     // Lift dark accents for text/icons; keep the same preset hue in both modes.
     if (app.darkTheme)
         Accent = mixColor(Accent, rgb(255, 255, 255), .23f);
+    if (app.colorTheme == 4)
+    {
+        // Keep arbitrary colors readable; the saved color and its swatch stay exact.
+        if (app.darkTheme)
+        {
+            const unsigned largest = std::max({Accent & 255, (Accent >> 8) & 255,
+                                               (Accent >> 16) & 255});
+            if (largest > 230)
+                Accent = mixColor(Accent, rgb(0, 0, 0), 1 - 230.0f / largest);
+            Accent = readableAccent(Accent, uiSurface(), rgb(230, 230, 230), 7);
+        }
+        else
+            Accent = readableAccent(base, uiSurface(), rgb(0, 0, 0), 3);
+        customSolidAccent = readableAccent(base, app.darkTheme ? rgb(255, 255, 255) : uiSelected(),
+                                           rgb(0, 0, 0), 4.5);
+    }
     Ink = app.darkTheme ? rgb(233, 237, 244) : rgb(32, 38, 46);
     Muted = app.darkTheme ? rgb(158, 170, 188) : rgb(112, 121, 135);
 }

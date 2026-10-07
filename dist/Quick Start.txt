@@ -83,6 +83,10 @@ The flash stays in the editor and never appears in copied or saved pixels.
 The Settings gear or F10 opens the modern settings panel in Side panels.
 Appearance offers Top toolbars or Side panels, four color themes (Purple, Orange,
 Blue and Teal), and Light or Dark. Colors work with either layout and do not alter exports.
+Custom color opens the spectrum, RGB and hex picker for your own UI accent.
+Apply color saves it immediately; Cancel keeps the previous theme. The custom color is
+remembered when you use another preset. Shades adapt to keep Light/Dark controls readable.
+Top toolbars offers the same picker through Settings > Color theme > Custom color.
 General, Capture, Export and View keep every original setting; Actions offers app commands.
 Settings save automatically. Esc or Done closes the panel. Scroll shorter panels;
 Tab and Enter navigate controls. Top toolbars retains its native menu bar.

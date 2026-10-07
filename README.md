@@ -6,7 +6,7 @@ Tiger Snip is a local Windows screenshot and annotation tool. Capture an area or
 
 - Pen, highlight, text, shapes, arrows, checks, and lines.
 - Crop, undo/redo, zoom, and ten recent editable captures.
-- Top toolbars or side panels, with Purple, Orange, Blue and Teal color themes.
+- Top toolbars or side panels, with Purple, Orange, Blue, Teal or a custom UI color.
 - Light or Dark appearance in either layout.
 - Stroke presets plus an adjustable pixel slider, and per-annotation opacity.
 - Optional borders, Samtec logos, and capture shortcuts.
@@ -34,7 +34,10 @@ each slider drag is one undoable edit. **Esc** cancels a slider drag.
 The **Settings** gear (or **F10**) opens a matching settings panel with appearance, capture,
 export, view and app actions. Settings save immediately. Choose **Purple**, **Orange**, **Blue**
 or **Teal**, then **Light** or **Dark**; both choices work with either layout and affect only
-the editor. Capture shortcuts, auto copy, rendering, all border options and all six logo styles
+the editor. **Custom color** opens the color spectrum with RGB and hex input for your own UI
+accent. Apply saves it; Cancel keeps the previous theme. Accent shades adjust for readable controls
+in Light and Dark, while the chosen color is remembered when you switch presets.
+Capture shortcuts, auto copy, rendering, all border options and all six logo styles
 remain available. The capture button's chevron
 also offers an instant capture of all monitors. Zoom and Fit are in the bottom bar.
 Top toolbars retains the native menu bar and the original controls above the image.

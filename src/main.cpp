@@ -103,6 +103,7 @@ enum Command
     ThemeOrange,
     ThemeBlue,
     ThemeTeal,
+    ThemeCustom,
     AppearanceLight,
     AppearanceDark,
     SettingsDismiss,
@@ -279,6 +280,8 @@ struct Application
     bool menuHidden = false;
     bool classicUI = false;
     unsigned colorTheme = 1;
+    Color customUIAccent = OrangeAccent;
+    bool themePickerOpen = false;
     bool darkTheme = false, appearancePreferencesDirty = false;
     bool settingsPanelOpen = false;
     bool settingsStartup = false;
@@ -611,8 +614,11 @@ void loadToolPreferences()
             preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 0) != 0;
     app.classicUI = preferenceUInt(app.iniPath, L"Settings", L"ToolbarLayout", 1) == 0;
     app.colorTheme = preferenceUInt(app.iniPath, L"Settings", L"ColorTheme", 1);
-    if (app.colorTheme >= 4)
+    if (app.colorTheme > 4)
         app.colorTheme = 1;
+    app.customUIAccent = preferenceUInt(app.iniPath, L"Settings", L"CustomUIAccent", OrangeAccent);
+    if (app.customUIAccent > 0xffffff)
+        app.customUIAccent = OrangeAccent;
     app.darkTheme = preferenceUInt(app.iniPath, L"Settings", L"DarkTheme", 0) != 0;
     app.appearancePreferencesDirty = false;
     updateInterfaceColors();
@@ -696,6 +702,7 @@ bool saveToolPreferences()
         if (app.appearancePreferencesDirty)
         {
             setting(L"Settings", L"ColorTheme", app.colorTheme);
+            setting(L"Settings", L"CustomUIAccent", app.customUIAccent);
             setting(L"Settings", L"DarkTheme", app.darkTheme);
         }
         if (app.exportPreferencesDirty)
@@ -3111,6 +3118,34 @@ void customColor(void (*test)(HWND) = nullptr)
     if (app.textEdit)
         SetFocus(app.textEdit);
 }
+void applyAppearancePreferences()
+{
+    updateInterfaceColors();
+    app.appearancePreferencesDirty = true;
+    app.workspaceBrush.reset();
+    app.textEditWorkspace.reset();
+    for (auto &preview : app.settingsLogoPreviews)
+        preview = {};
+    applyWindowTheme();
+    updateMenus();
+    saveToolPreferencesOrNotify();
+    repaint();
+}
+void customUIColor(void (*test)(HWND) = nullptr)
+{
+    struct PickerGuard
+    {
+        PickerGuard() { app.themePickerOpen = true; }
+        ~PickerGuard() { app.themePickerOpen = false; }
+    } guard;
+    if (const auto value = pickPaletteColor(app.instance, app.window, app.customUIAccent, true,
+                                           test, L"Custom UI color", L"Apply color"))
+    {
+        app.customUIAccent = *value;
+        app.colorTheme = 4;
+        applyAppearancePreferences();
+    }
+}
 void paletteMenu(POINT point)
 {
     POINT client = point;
@@ -4381,6 +4416,9 @@ void command(int id, bool editSelectedStyle)
     }
     switch (id)
     {
+    case ThemeCustom:
+        customUIColor();
+        break;
     case ThemePurple:
     case ThemeOrange:
     case ThemeBlue:
@@ -4391,16 +4429,7 @@ void command(int id, bool editSelectedStyle)
             app.colorTheme = static_cast<unsigned>(id - ThemePurple);
         else
             app.darkTheme = id == AppearanceDark;
-        updateInterfaceColors();
-        app.appearancePreferencesDirty = true;
-        app.workspaceBrush.reset();
-        app.textEditWorkspace.reset();
-        for (auto &preview : app.settingsLogoPreviews)
-            preview = {};
-        applyWindowTheme();
-        updateMenus();
-        saveToolPreferencesOrNotify();
-        repaint();
+        applyAppearancePreferences();
         break;
     case SettingsDismiss:
     case SettingsDone:
@@ -4880,7 +4909,7 @@ void acceptCapture(Bitmap captured)
 }
 void startSnip(bool instant, bool allMonitors)
 {
-    if (app.overlay || app.capturePending || app.settingsWindow)
+    if (app.overlay || app.capturePending || app.settingsWindow || app.themePickerOpen)
         return;
     closeSettingsPanel();
     closeRecent();
@@ -5091,6 +5120,7 @@ HMENU createMenu()
     app.colorThemeMenu = CreatePopupMenu();
     for (int i = 0; i < 4; ++i)
         AppendMenuW(app.colorThemeMenu, MF_STRING, ThemePurple + i, ThemeNames[i]);
+    AppendMenuW(app.colorThemeMenu, MF_STRING, ThemeCustom, L"&Custom color...");
     AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.colorThemeMenu),
                 L"Color &theme");
     app.appearanceMenu = CreatePopupMenu();
@@ -5136,7 +5166,7 @@ void updateMenus()
     HMENU menu = app.fullScreen || app.menuHidden ? app.windowedMenu : GetMenu(app.window);
     CheckMenuRadioItem(app.interfaceMenu, InterfaceClassic, InterfaceOrange,
                        app.classicUI ? InterfaceClassic : InterfaceOrange, MF_BYCOMMAND);
-    CheckMenuRadioItem(app.colorThemeMenu, ThemePurple, ThemeTeal, ThemePurple + app.colorTheme,
+    CheckMenuRadioItem(app.colorThemeMenu, ThemePurple, ThemeCustom, ThemePurple + app.colorTheme,
                        MF_BYCOMMAND);
     CheckMenuRadioItem(app.appearanceMenu, AppearanceLight, AppearanceDark,
                        app.darkTheme ? AppearanceDark : AppearanceLight, MF_BYCOMMAND);
@@ -5739,7 +5769,7 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         }
         break;
     case WM_HOTKEY:
-        if (!app.settingsWindow && !app.settingsRecording)
+        if (!app.settingsWindow && !app.settingsRecording && !app.themePickerOpen)
         {
             if (wp == static_cast<WPARAM>(app.hotkeyId))
                 startSnip(true);

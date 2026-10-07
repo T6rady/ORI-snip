@@ -2,6 +2,45 @@
 #include "../src/main.cpp"
 #include <iostream>
 
+struct CustomThemePickerTest
+{
+    Color initial, chosen;
+    bool cancel = false;
+    std::string error;
+} customThemePickerTest;
+void driveCustomThemePicker(HWND window)
+{
+    try
+    {
+        auto require = [](bool ok, const char *message) {
+            if (!ok)
+                throw std::runtime_error(message);
+        };
+        wchar_t title[64]{}, action[32]{}, initial[16]{};
+        GetWindowTextW(window, title, 64);
+        GetDlgItemTextW(window, IDOK, action, 32);
+        GetDlgItemTextW(window, 11, initial, 16);
+        require(std::wstring(title) == L"Custom UI color" && std::wstring(action) == L"Apply color" &&
+                    std::wstring(initial) == colorHex(customThemePickerTest.initial),
+                "The UI color picker has the wrong labels or initial color.");
+        require(app.themePickerOpen && !IsWindowEnabled(app.window),
+                "The UI color picker did not protect its owner.");
+        SendMessageW(app.window, WM_HOTKEY, app.hotkeyId, 0);
+        require(!app.capturePending && !app.overlay,
+                "A capture shortcut interrupted the UI color picker.");
+        SetDlgItemTextW(window, 11, L"#GGGGGG");
+        require(!IsWindowEnabled(GetDlgItem(window, IDOK)), "Invalid custom UI hex was accepted.");
+        SetDlgItemTextW(window, 11, colorHex(customThemePickerTest.chosen).c_str());
+        require(IsWindowEnabled(GetDlgItem(window, IDOK)), "Valid custom UI hex was rejected.");
+        SendMessageW(window, WM_COMMAND, customThemePickerTest.cancel ? IDCANCEL : IDOK, 0);
+    }
+    catch (const std::exception &failure)
+    {
+        customThemePickerTest.error = failure.what();
+        SendMessageW(window, WM_COMMAND, IDCANCEL, 0);
+    }
+}
+
 int wmain()
 {
     const auto originalStation = GetProcessWindowStation();
@@ -41,7 +80,7 @@ int wmain()
         ShowWindow(app.window, SW_SHOWNOACTIVATE);
         // Both interfaces preserve the complete existing menu tree.
         const HMENU menu = app.windowedMenu;
-        const std::array<int, 22> settings = {Settings,          AutoCopy,
+        const std::array<int, 23> settings = {Settings,          AutoCopy,
                                               RenderingSettings, SaveLocation,
                                               Startup,           ProfessionalBorder,
                                               ProfessionalBlur,  ProfessionalRounded,
@@ -50,7 +89,7 @@ int wmain()
                                               FullScreen,        About,
                                               InterfaceClassic,  InterfaceOrange,
                                               ThemePurple, ThemeOrange, ThemeBlue, ThemeTeal,
-                                              AppearanceLight, AppearanceDark};
+                                              AppearanceLight, AppearanceDark, ThemeCustom};
         for (int id : settings)
             require(GetMenuState(menu, id, MF_BYCOMMAND) != static_cast<UINT>(-1),
                     "An existing setting or view option is missing.");
@@ -233,7 +272,7 @@ int wmain()
                 panelCommands.push_back(control.command);
         }
         for (int id : {InterfaceClassic, InterfaceOrange, ThemePurple, ThemeOrange, ThemeBlue,
-                       ThemeTeal, AppearanceLight, AppearanceDark, SettingsRenderer, Startup,
+                       ThemeTeal, ThemeCustom, AppearanceLight, AppearanceDark, SettingsRenderer, Startup,
                        SaveLocation, SettingsAreaKey, SettingsAllKey, AutoCopy, ProfessionalBorder,
                        ProfessionalBlur, ProfessionalRounded, SamtecLogo, ToggleActions,
                        ToggleTools, ToggleFormatting, FullScreen, Fit, Actual, NewSnip, InstantSnip,
@@ -357,6 +396,84 @@ int wmain()
         loadToolPreferences();
         require(app.colorTheme == 3 && app.darkTheme && !app.classicUI,
                 "Color, appearance and layout preferences did not restore independently.");
+        const auto priorCustom = app.customUIAccent;
+        const auto priorPalette = app.palette;
+        const auto priorToolColors = app.colors;
+        const Color pickedColor = rgb(202, 47, 136);
+        customThemePickerTest = {priorCustom, pickedColor, true, {}};
+        customUIColor(driveCustomThemePicker);
+        require(customThemePickerTest.error.empty() && !app.themePickerOpen &&
+                    app.customUIAccent == priorCustom && app.colorTheme == 3 && app.darkTheme,
+                "Canceling the custom UI picker changed appearance preferences.");
+        customThemePickerTest = {priorCustom, pickedColor, false, {}};
+        customUIColor(driveCustomThemePicker);
+        require(customThemePickerTest.error.empty() && !app.themePickerOpen &&
+                    app.customUIAccent == pickedColor && app.colorTheme == 4 &&
+                    settingsControlSelected(ThemeCustom) &&
+                    (GetMenuState(app.colorThemeMenu, ThemeCustom, MF_BYCOMMAND) & MF_CHECKED) &&
+                    preferenceUInt(app.iniPath, L"Settings", L"CustomUIAccent", 0) == pickedColor &&
+                    preferenceUInt(app.iniPath, L"Settings", L"ColorTheme", 0) == 4,
+                "Applying the custom UI picker did not select and immediately save its color.");
+        processKey(VK_ESCAPE);
+        for (int layout : {InterfaceClassic, InterfaceOrange})
+            for (int appearance : {AppearanceLight, AppearanceDark})
+            {
+                command(layout);
+                command(appearance);
+                require(app.colorTheme == 4 && app.customUIAccent == pickedColor,
+                        "Custom UI color was reset by layout or Light/Dark changes.");
+                saveBytes(std::wstring(app.classicUI ? L"ui-top-custom-" : L"ui-side-custom-") +
+                              (app.darkTheme ? L"dark.png" : L"light.png"),
+                          app.graphics.png(renderEditorPreview()));
+                require(renderedExport().pixels == themeExport.pixels &&
+                            app.document.items == themeItems && app.palette == priorPalette &&
+                            app.colors == priorToolColors && app.document.selected == themeSelection &&
+                            app.document.canUndo() == themeUndo,
+                        "Custom UI color changed exports, annotations, palette or drawing defaults.");
+            }
+        app.colorTheme = 0;
+        app.customUIAccent = 0;
+        app.darkTheme = false;
+        loadToolPreferences();
+        require(app.colorTheme == 4 && app.customUIAccent == pickedColor && app.darkTheme,
+                "Custom UI color did not survive preference reload.");
+        command(ThemePurple);
+        require(app.customUIAccent == pickedColor,
+                "Selecting a preset discarded the remembered custom color.");
+        command(AppMenu);
+        command(SettingsPageFirst);
+        customThemePickerTest = {pickedColor, pickedColor, false, {}};
+        customUIColor(driveCustomThemePicker);
+        require(customThemePickerTest.error.empty() && app.colorTheme == 4,
+                "Reselecting Custom did not seed the picker with the remembered color.");
+        saveBytes(L"ui-settings-custom-dark.png", app.graphics.png(renderEditorPreview()));
+        // Black, white and pale colors remain usable in both appearances/layouts.
+        processKey(VK_ESCAPE);
+        for (Color chosen : {rgb(0, 0, 0), rgb(255, 255, 255), rgb(255, 255, 190)})
+        {
+            customThemePickerTest = {app.customUIAccent, chosen, false, {}};
+            customUIColor(driveCustomThemePicker);
+            require(customThemePickerTest.error.empty(), "Cannot choose an extreme UI color.");
+            for (int appearance : {AppearanceLight, AppearanceDark})
+            {
+                command(appearance);
+                require(colorContrast(uiSolidAccent(), rgb(255, 255, 255)) >= 4.5 &&
+                            colorContrast(uiAccentText(), uiSelected()) >= 4.5,
+                        "Custom UI labels became unreadable with an extreme color.");
+                for (int layout : {InterfaceClassic, InterfaceOrange})
+                {
+                    command(layout);
+                    auto preview = renderEditorPreview();
+                    const size_t i = (static_cast<size_t>(3) * preview.width + 3) * 4;
+                    require((preview.pixels[i] < 100) == app.darkTheme,
+                            "A custom UI color replaced toolbar surfaces in Dark.");
+                }
+            }
+        }
+        customThemePickerTest = {app.customUIAccent, pickedColor, false, {}};
+        customUIColor(driveCustomThemePicker);
+        command(AppMenu);
+        command(SettingsPageFirst);
         command(ThemeOrange);
         command(AppearanceLight);
         // Compact DPI layouts keep every control reachable by keyboard/scroll.
@@ -535,6 +652,8 @@ int wmain()
         std::cout
             << "PASS: complete modern settings/menus, overlay input isolation and shortcut recording, "
                "four colors and light/dark in both layouts with identical exports, theme persistence, "
+               "custom UI picker Apply/Cancel/validation/reload and remembered color, "
+               "extreme-color contrast with unchanged drawing defaults, "
                "compact scrolling settings at each DPI; native UI layout at "
                "100/150/200% DPI, compact bounds, preset/custom "
                "stroke sizes, single-step undo/redo, cancellation, opacity export/PNG, "

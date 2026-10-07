@@ -96,9 +96,11 @@ SettingsPanelLayout settingsPanelLayout()
                                   ThemeNames[i], L""});
         }
         y += 146;
+        row(ThemeCustom, SettingsControlKind::Accent, L"Custom color",
+            colorHex(app.customUIAccent) + L"  \u00B7  Choose color", 56);
         heading(L"Appearance");
         choices(AppearanceLight, L"Light", L"Dark");
-        row(0, SettingsControlKind::Text, L"Your theme works with either toolbar layout.", L"", 36);
+        row(0, SettingsControlKind::Text, L"Accent shades adapt to Light and Dark for readability.", L"", 36);
         break;
     case 1:
         row(SettingsRenderer, SettingsControlKind::Toggle, L"Software rendering",

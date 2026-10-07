@@ -1,6 +1,6 @@
 bool settingsControlSelected(int id)
 {
-    if (id >= ThemePurple && id <= ThemeTeal)
+    if (id >= ThemePurple && id <= ThemeCustom)
         return app.colorTheme == static_cast<unsigned>(id - ThemePurple);
     if (id >= SettingsPageFirst && id <= SettingsPageLast)
         return id - SettingsPageFirst == app.settingsPage;
@@ -120,9 +120,18 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
             }
             else if (control.kind == SettingsControlKind::Accent)
             {
-                const auto accent = ThemeAccents[control.command - ThemePurple];
+                const auto accent = control.command == ThemeCustom ? app.customUIAccent
+                                      : ThemeAccents[control.command - ThemePurple];
                 fill({r.left + 12, r.top + 15, r.left + 38, r.top + 41}, accent, 6);
+                if (control.command == ThemeCustom)
+                {
+                    brush->SetColor(color(uiBorder()));
+                    rt->DrawRoundedRectangle(D2D1::RoundedRect(
+                        {r.left + 12, r.top + 15, r.left + 38, r.top + 41}, 6, 6), brush, 1);
+                }
                 text(control.title, {r.left + 48, r.top + 15, r.right - 28, r.bottom}, fg);
+                if (control.command == ThemeCustom)
+                    text(control.detail, {r.left + 160, r.top + 15, r.right - 28, r.bottom}, Muted, true);
                 if (selected)
                     text(L"\u2713", {r.right - 24, r.top + 15, r.right - 6, r.bottom}, Accent);
             }

@@ -170,6 +170,7 @@ void Annotation::resize(Rect from, Rect to)
                                      to.height() / std::max(1.0f, from.height()));
         fontSize = std::clamp(fontSize * scale, 8.0f, 144.0f);
         textWidth = std::max(1.0f, textWidth * scale);
+        textHeight = std::max(0.0f, textHeight * scale);
     }
     auto transform = [&](Point p) -> Point {
         float x = from.width() > .001f ? (p.x - from.left) / from.width() : .5f;

@@ -31,6 +31,10 @@ on Shapes, Arrow, Check/X and Line to choose a preset, or use the visual style p
 properties panel. Pixel sizes have quick presets, a continuous slider and plus/minus controls;
 each slider drag is one undoable edit. **Esc** cancels a slider drag.
 
+Selected text has side handles for independent box sizing. Drag left/right to rewrap text
+at the same font size, or top/bottom to adjust height while keeping every line visible.
+Corners scale the font. Resizing supports Undo/Redo and **Esc** cancellation.
+
 The **Settings** gear (or **F10**) opens a matching settings panel with appearance, capture,
 export, view and app actions. Settings save immediately. Choose **Purple**, **Orange**, **Blue**
 or **Teal**, then **Light** or **Dark**; both choices work with either layout and affect only

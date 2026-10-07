@@ -47,7 +47,11 @@ The typing field fits the text and shows the screenshot behind plain text, witho
 Text uses Bahnschrift, a clean modern typeface, with Segoe UI fallback if unavailable.
 Enter adds a line. Ctrl+Enter or clicking elsewhere finishes and returns to Select.
 Esc cancels. Select Text again to add another annotation; double-click text to edit it again.
-Select text to move it or drag its corners to scale it. Text edits support undo/redo.
+Select text to move it. Drag a left/right middle handle to change the wrap width without
+changing the font size; widen it to put wrapped text on one line. Top/bottom middle handles
+adjust the box height without stretching text, with a minimum that keeps all lines visible.
+Corner handles still scale the font. Each resize is one undo step; Esc cancels the drag.
+Explicit line breaks stay on separate lines. Text edits support undo/redo.
 Eyedropper: click the pipette beside the colors, then click the image.
 It samples screenshot/annotation colors and can recolor a selected object. Esc cancels.
 Shapes: circles and squares share a menu with large visual style previews.

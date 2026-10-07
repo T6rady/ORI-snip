@@ -73,6 +73,9 @@ struct Annotation
     std::vector<Point> points;
     std::wstring text;
     float fontSize = 24, textWidth = 600;
+    // Side handles set an explicit wrap width; vertical handles set a minimum height.
+    bool textFrame = false;
+    float textHeight = 0;
     bool bold = false, boxed = false;
     bool curveFlipped = false;
     bool operator==(const Annotation &) const = default;

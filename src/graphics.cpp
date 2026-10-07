@@ -110,8 +110,10 @@ void Graphics::measureText(Annotation &item)
     DWRITE_TEXT_METRICS metrics{};
     check(layout->GetMetrics(&metrics), "Cannot measure annotation text.");
     const float padding = item.boxed ? 12 : 0;
-    item.b = item.a + Point{std::max(1.0f, metrics.widthIncludingTrailingWhitespace) + padding * 2,
-                            metrics.height + padding * 2};
+    const float width = std::max(
+        {1.0f, metrics.widthIncludingTrailingWhitespace, item.textFrame ? item.textWidth : 0.0f});
+    item.b = item.a +
+             Point{width + padding * 2, std::max(metrics.height, item.textHeight) + padding * 2};
 }
 void Graphics::drawAnnotations(ID2D1RenderTarget *rt, const std::vector<Annotation> &items,
                                int editingText)

@@ -1366,6 +1366,7 @@ HCURSOR currentGrabCursor(bool closed)
     return cursor ? cursor : LoadCursorW(nullptr, IDC_HAND);
 }
 std::vector<Point> handles(const Annotation &item);
+int handleAt(const Annotation &item, Point screen);
 bool handPanAt(Point point)
 {
     if (app.tool != Tool::Select || app.erasing || app.cropping || app.pickingColor ||
@@ -1406,6 +1407,18 @@ HCURSOR editorCursor(Point point)
         return LoadCursorW(nullptr, IDC_CROSS);
     if (onCanvas && app.erasing)
         return currentEraserCursor();
+    if (onCanvas && app.tool == Tool::Select && selected() &&
+        app.document.items[app.document.selected].kind == Tool::Text)
+    {
+        const int handle = app.drag == Drag::Resize
+                               ? app.handle
+                               : handleAt(app.document.items[app.document.selected], point);
+        if (handle >= 0)
+            return LoadCursorW(nullptr, handle == 5 || handle == 7   ? IDC_SIZEWE
+                                        : handle == 4 || handle == 6 ? IDC_SIZENS
+                                        : handle == 0 || handle == 2 ? IDC_SIZENWSE
+                                                                     : IDC_SIZENESW);
+    }
     if (onCanvas && handPanAt(point))
         return currentGrabCursor(false);
     if (onCanvas && app.tool == Tool::Text)
@@ -1594,7 +1607,58 @@ std::vector<Point> handles(const Annotation &item)
     if (item.kind == Tool::Arrow || item.kind == Tool::Line)
         return {item.a, item.b};
     auto r = item.bounds();
+    if (item.kind == Tool::Text)
+        return {{r.left, r.top},
+                {r.right, r.top},
+                {r.right, r.bottom},
+                {r.left, r.bottom},
+                {(r.left + r.right) / 2, r.top},
+                {r.right, (r.top + r.bottom) / 2},
+                {(r.left + r.right) / 2, r.bottom},
+                {r.left, (r.top + r.bottom) / 2}};
     return {{r.left, r.top}, {r.right, r.top}, {r.right, r.bottom}, {r.left, r.bottom}};
+}
+int handleAt(const Annotation &item, Point screen)
+{
+    const auto points = handles(item);
+    int nearest = -1;
+    float distance = 9;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        const float d = length(screen - app.view.toScreen(points[i]));
+        if (d <= distance)
+        {
+            nearest = static_cast<int>(i);
+            distance = d;
+        }
+    }
+    return nearest;
+}
+void resizeTextFrame(Annotation &item, int handle, Point p)
+{
+    const auto r = item.bounds();
+    const float padding = item.boxed ? 24.0f : 0;
+    if (handle == 5 || handle == 7)
+    {
+        if (std::abs(p.x - (handle == 5 ? r.right : r.left)) < .01f)
+            return;
+        const float width = handle == 5 ? p.x - r.left : r.right - p.x;
+        item.textWidth = std::clamp(width - padding, 16.0f, 16384.0f);
+        item.textFrame = true;
+        app.graphics.measureText(item);
+        if (handle == 7)
+            item.move({r.right - item.b.x, 0});
+    }
+    else
+    {
+        if (std::abs(p.y - (handle == 6 ? r.bottom : r.top)) < .01f)
+            return;
+        const float height = handle == 6 ? p.y - r.top : r.bottom - p.y;
+        item.textHeight = std::clamp(height - padding, 0.0f, 16384.0f);
+        app.graphics.measureText(item);
+        if (handle == 4)
+            item.move({0, r.bottom - item.b.y});
+    }
 }
 bool recentChoice(int id)
 {
@@ -3618,19 +3682,18 @@ void mouseDown(LPARAM lp, bool middle = false)
     {
         if (selected())
         {
-            auto points = handles(app.document.items[app.document.selected]);
-            for (size_t i = 0; i < points.size(); ++i)
-                if (length(screen - app.view.toScreen(points[i])) <= 9)
-                {
-                    app.handle = static_cast<int>(i);
-                    app.before = app.document.items[app.document.selected];
-                    app.document.begin();
-                    app.drag = app.before.kind == Tool::Arrow || app.before.kind == Tool::Line
-                                   ? Drag::Endpoint
-                                   : Drag::Resize;
-                    SetCapture(app.window);
-                    return;
-                }
+            const int handle = handleAt(app.document.items[app.document.selected], screen);
+            if (handle >= 0)
+            {
+                app.handle = handle;
+                app.before = app.document.items[app.document.selected];
+                app.document.begin();
+                app.drag = app.before.kind == Tool::Arrow || app.before.kind == Tool::Line
+                               ? Drag::Endpoint
+                               : Drag::Resize;
+                SetCapture(app.window);
+                return;
+            }
         }
         app.document.selected = app.document.hit(p, 6 / app.view.scale);
         if (selected())
@@ -3769,26 +3832,32 @@ void mouseMove(LPARAM lp)
         }
         else if (app.drag == Drag::Resize)
         {
-            auto corners = handles(app.before);
-            Point opposite = corners[(app.handle + 2) % 4];
-            if (item.kind == Tool::Check || item.kind == Tool::Text ||
-                (GetKeyState(VK_SHIFT) & 0x8000))
+            if (item.kind == Tool::Text && app.handle >= 4)
+                resizeTextFrame(item, app.handle,
+                                handles(app.before)[app.handle] + (p - app.dragStart));
+            else
             {
-                auto r = app.before.bounds();
-                Point delta = p - opposite;
-                float aspect = r.height() > .001f ? r.width() / r.height() : 1;
-                float w = std::max(4.0f, std::abs(delta.x)), h = w / std::max(.01f, aspect);
-                p = {opposite.x + (delta.x < 0 ? -w : w), opposite.y + (delta.y < 0 ? -h : h)};
-            }
-            auto to = rectangle(opposite, p);
-            if (to.width() >= 2 && to.height() >= 2)
-            {
-                item.resize(app.before.bounds(), to);
-                if (item.kind == Tool::Text)
-                    app.graphics.measureText(item);
+                auto corners = handles(app.before);
+                Point opposite = corners[(app.handle + 2) % 4];
+                if (item.kind == Tool::Check || item.kind == Tool::Text ||
+                    (GetKeyState(VK_SHIFT) & 0x8000))
+                {
+                    auto r = app.before.bounds();
+                    Point delta = p - opposite;
+                    float aspect = r.height() > .001f ? r.width() / r.height() : 1;
+                    float w = std::max(4.0f, std::abs(delta.x)), h = w / std::max(.01f, aspect);
+                    p = {opposite.x + (delta.x < 0 ? -w : w), opposite.y + (delta.y < 0 ? -h : h)};
+                }
+                auto to = rectangle(opposite, p);
+                if (to.width() >= 2 && to.height() >= 2)
+                {
+                    item.resize(app.before.bounds(), to);
+                    if (item.kind == Tool::Text)
+                        app.graphics.measureText(item);
+                }
             }
         }
-        if (length(p - app.dragStart) > .01f)
+        if (item != app.before)
             app.changed = true;
     }
     repaint();

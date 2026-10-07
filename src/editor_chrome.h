@@ -193,7 +193,8 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                 if (inspectorTool() == Tool::Select && !selected())
                     hint = L"Select an annotation to edit it.";
                 if (textMode())
-                    hint = L"Click the image to add text.";
+                    hint = selected() ? L"Drag side handles to reflow text."
+                                      : L"Click the image to add text.";
                 text(hint, {l.help.left, l.help.top, l.help.right, l.help.top + 26}, Muted,
                      app.graphics.smallFont.get());
                 text(L"Ctrl+Z undoes your last change.",
@@ -201,6 +202,10 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                      app.graphics.smallFont.get());
                 if (highlightMode())
                     text(L"Highlight keeps its soft blending.",
+                         {l.help.left, l.help.top + 60, l.help.right, l.help.top + 86}, Muted,
+                         app.graphics.smallFont.get());
+                else if (textMode() && selected())
+                    text(L"Corner handles scale the font.",
                          {l.help.left, l.help.top + 60, l.help.right, l.help.top + 86}, Muted,
                          app.graphics.smallFont.get());
             }

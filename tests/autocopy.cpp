@@ -5,6 +5,27 @@
 #include <iostream>
 #include <thread>
 
+bool recentCopyMenuSeen = false;
+LRESULT CALLBACK driveRecentCopyMenu(int code, WPARAM wp, LPARAM lp)
+{
+    if (code >= 0)
+    {
+        const auto message = reinterpret_cast<const CWPSTRUCT *>(lp);
+        if (message->message == WM_INITMENUPOPUP)
+        {
+            const auto menu = reinterpret_cast<HMENU>(message->wParam);
+            recentCopyMenuSeen = GetMenuItemCount(menu) == 1 && GetMenuItemID(menu, 0) == Copy;
+            PostMessageW(message->hwnd, WM_CHAR, L'c', 0);
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+void CALLBACK cancelStalledRecentMenu(HWND window, UINT, UINT_PTR id, DWORD)
+{
+    KillTimer(window, id);
+    EndMenu();
+}
+
 int wmain()
 {
     const auto originalStation = GetProcessWindowStation();
@@ -23,7 +44,7 @@ int wmain()
         require(station && SetProcessWindowStation(station), "Cannot isolate test clipboard.");
         desktop = CreateDesktopW(L"TigerSnipAutoCopyTest", nullptr, nullptr, 0,
                                  DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_READOBJECTS |
-                                     DESKTOP_WRITEOBJECTS,
+                                     DESKTOP_WRITEOBJECTS | DESKTOP_HOOKCONTROL,
                                  nullptr);
         require(desktop && SetThreadDesktop(desktop), "Cannot attach private test desktop.");
         check(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED), "Cannot initialize COM.");
@@ -175,6 +196,61 @@ int wmain()
         require(GetClipboardSequenceNumber() == beforeCancel,
                 "Diagnostic captures changed clipboard.");
         app.smoke = false;
+        // Copy an inactive recent capture, including its annotations and current export effects,
+        // while retaining the live capture, selection, undo history and viewport.
+        for (int layout : {InterfaceClassic, InterfaceOrange})
+        {
+            command(layout);
+            command(RecentSnips);
+            require(app.recentOpen, "Recent snips did not open.");
+            app.document.begin();
+            app.document.items.push_back(arrow);
+            app.document.commit();
+            app.document.selected = 0;
+            app.dirty = true;
+            const auto currentImage = app.image;
+            const auto currentItems = app.document.items;
+            const auto currentSelection = app.document.selected;
+            const auto currentView = app.view;
+            const int current = app.activeRecent;
+            app.exportOptions.professionalBorder = true;
+            app.exportOptions.professionalBlur = true;
+            app.exportOptions.professionalRounded = true;
+            resetPreview();
+            const auto &saved = app.recent[0];
+            const auto expected = app.graphics.exportImage(saved.image, saved.document.items,
+                                                           app.exportOptions);
+            const auto recentButton = std::find_if(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
+                return b.command == RecentChoiceFirst;
+            });
+            require(recentButton != app.buttons.end(), "Saved Recent thumbnail is missing.");
+            POINT menuPoint{static_cast<LONG>((recentButton->rect.left + 12) * app.dpi),
+                            static_cast<LONG>((recentButton->rect.top + 12) * app.dpi)};
+            ClientToScreen(app.window, &menuPoint);
+            recentCopyMenuSeen = false;
+            const auto hook = SetWindowsHookExW(WH_CALLWNDPROC, driveRecentCopyMenu, nullptr,
+                                               GetCurrentThreadId());
+            require(hook != nullptr, "Cannot drive Recent context menu.");
+            SetTimer(app.window, 12345, 2000, cancelStalledRecentMenu);
+            SendMessageW(app.window, WM_CONTEXTMENU, reinterpret_cast<WPARAM>(app.window),
+                         MAKELPARAM(menuPoint.x, menuPoint.y));
+            KillTimer(app.window, 12345);
+            UnhookWindowsHookEx(hook);
+            require(recentCopyMenuSeen, "Recent right-click did not offer Copy.");
+            clipboardMatches(expected);
+            require(app.recentOpen && app.activeRecent == current && app.dirty &&
+                        app.image.pixels == currentImage.pixels && app.document.items == currentItems &&
+                        app.document.selected == currentSelection && app.document.canUndo() &&
+                        app.view.origin == currentView.origin && app.view.scale == currentView.scale,
+                    "Copying a recent capture altered the live capture or closed Recent.");
+            copyRecentSnip(current);
+            clipboardMatches(renderedExport());
+            require(app.recentOpen && app.activeRecent == current && !app.dirty,
+                    "Copying the current Recent entry used stale data or closed Recent.");
+            command(RecentSnips);
+        }
+        app.exportOptions = {};
+        resetPreview();
         // Another thread owns the clipboard so both automatic and manual failure paths run.
         const auto held = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         const auto release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -200,6 +276,9 @@ int wmain()
             command(Copy);
             failureHandled = hasImage() && app.image.pixels == image.pixels &&
                              !app.copyFlashStarted && app.status.find(L"Clipboard is busy") == 0;
+            copyRecentSnip(0);
+            require(app.status.find(L"Clipboard is busy") == 0 && !app.copyNoticeStarted,
+                    "Failed Recent copy showed a success confirmation.");
         }
         catch (...)
         {
@@ -239,6 +318,7 @@ int wmain()
                      "selection "
                      "captures, PNG/DIB export, already-copied snip Ctrl+C and repeated copy, "
                      "inert plain letters, annotations, disabled capture, "
+                     "direct Recent PNG/DIB copy with annotations and export effects, live edit retention, "
                      "cancel/Recent/diagnostic isolation, busy clipboard retention and retry. User "
                      "clipboard untouched.\n";
     }

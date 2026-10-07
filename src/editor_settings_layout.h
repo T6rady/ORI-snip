@@ -8,6 +8,8 @@ enum class SettingsControlKind
     Text,
     Button,
     Toggle,
+    NestedToggle,
+    Group,
     Choice,
     Accent,
     Logo
@@ -83,19 +85,22 @@ SettingsPanelLayout settingsPanelLayout()
     switch (app.settingsPage)
     {
     case 0:
-        heading(L"Toolbar layout");
-        choices(InterfaceClassic, L"Top toolbars", L"Side panels");
+        heading(L"Interface layout");
+        choices(InterfaceClassic, L"Classic UI", L"New UI");
+        row(0, SettingsControlKind::Text,
+            L"New UI uses side panels. Classic UI uses top toolbars.", L"", 48);
         heading(L"Color theme");
-        for (int i = 0; i < 4; ++i)
+        for (size_t slot = 0; slot < PresetThemeIndices.size(); ++slot)
         {
-            const float half = (l.body.width() - 10) / 2;
-            const float left = l.body.left + (i % 2) * (half + 10), top = y + (i / 2) * 66;
-            l.controls.push_back({{left, top, left + half, top + 56},
+            const int i = PresetThemeIndices[slot];
+            const float width = (l.body.width() - 20) / 3;
+            const float left = l.body.left + slot * (width + 10);
+            l.controls.push_back({{left, y, left + width, y + 56},
                                   ThemePurple + i,
                                   SettingsControlKind::Accent,
                                   ThemeNames[i], L""});
         }
-        y += 146;
+        y += 80;
         row(ThemeCustom, SettingsControlKind::Accent, L"Custom color",
             colorHex(app.customUIAccent) + L"  \u00B7  Choose color", 56);
         heading(L"Appearance");
@@ -131,12 +136,26 @@ SettingsPanelLayout settingsPanelLayout()
             L"New captures go straight to the clipboard.");
         break;
     case 3: {
+        const size_t borderGroup = l.controls.size();
+        l.controls.push_back({{l.body.left, y, l.body.right, y}, 0,
+                              SettingsControlKind::Group, L"", L""});
         row(ProfessionalBorder, SettingsControlKind::Toggle, L"Professional Border",
             L"The original soft border, applied to Copy and PNG Save.");
-        row(ProfessionalBlur, SettingsControlKind::Toggle, L"Soft shadow",
-            L"Adds transparent padding around the image.");
-        row(ProfessionalRounded, SettingsControlKind::Toggle, L"Rounded corners",
-            L"Keeps screenshot content unchanged.");
+        row(0, SettingsControlKind::Text,
+            app.exportOptions.professionalBorder ? L"Professional Border options"
+                                                : L"Enable Professional Border to use these options.",
+            L"", 28);
+        l.controls.back().rect.left += 24;
+        l.controls.back().rect.right -= 12;
+        auto borderOption = [&](int command, const wchar_t *title, const wchar_t *detail) {
+            row(command, SettingsControlKind::NestedToggle, title, detail);
+            l.controls.back().rect.left += 24;
+            l.controls.back().rect.right -= 12;
+        };
+        borderOption(ProfessionalBlur, L"Soft shadow", L"Adds transparent padding around the image.");
+        borderOption(ProfessionalRounded, L"Rounded corners", L"Keeps screenshot content unchanged.");
+        l.controls[borderGroup].rect.bottom = y;
+        y += 12;
         row(SamtecLogo, SettingsControlKind::Toggle, L"Samtec logo",
             L"Choose a badge or subtle watermark below.");
         heading(L"Logo style");
@@ -153,10 +172,13 @@ SettingsPanelLayout settingsPanelLayout()
         break;
     }
     case 4:
-        row(ToggleActions, SettingsControlKind::Toggle, L"Command bar",
+        row(ToggleActions, SettingsControlKind::Toggle, app.classicUI ? L"Actions" : L"Command bar",
             L"Capture, undo, save, and copy controls.");
-        row(ToggleTools, SettingsControlKind::Toggle, L"Tool rail", L"Drawing tools on the left.");
-        row(ToggleFormatting, SettingsControlKind::Toggle, L"Properties panel",
+        row(ToggleTools, SettingsControlKind::Toggle,
+            app.classicUI ? L"Tools and shapes" : L"Tool rail",
+            app.classicUI ? L"Drawing tools above the image." : L"Drawing tools on the left.");
+        row(ToggleFormatting, SettingsControlKind::Toggle,
+            app.classicUI ? L"Color and size" : L"Properties panel",
             L"Color, size, style, and opacity controls.");
         row(FullScreen, SettingsControlKind::Button,
             app.fullScreen ? L"Exit full screen" : L"Full screen",

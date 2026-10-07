@@ -6,7 +6,7 @@ Tiger Snip is a local Windows screenshot and annotation tool. Capture an area or
 
 - Pen, highlight, text, shapes, arrows, checks, and lines.
 - Crop, undo/redo, zoom, and ten recent editable captures.
-- Top toolbars or side panels, with Purple, Orange, Blue, Teal or a custom UI color.
+- Top toolbars or side panels, with Purple, Blue, Teal or a custom UI color.
 - Light or Dark appearance in either layout.
 - Stroke presets plus an adjustable pixel slider, and per-annotation opacity.
 - Optional borders, Samtec logos, and capture shortcuts.
@@ -17,9 +17,15 @@ Open **dist/Tiger Snip Setup.msi** and click **Install**. When setup confirms su
 
 The standalone **dist/Tiger Snip.exe** can also run directly.
 
+Fresh installations start with the new **Side panels** UI and the Purple light theme.
+Existing users keep their saved layout and colors.
+Saved selections of the retired Orange preset switch to Purple; saved custom colors are retained.
+
 ## Use
 
 Click **New snip** and drag a rectangle. Add annotations, then press **Ctrl+C** to copy or **Ctrl+S** to save. See [Quick Start](dist/Quick%20Start.txt) for the controls.
+The capture icon on the welcome screen also starts a snip. **Recent** keeps the last ten captures;
+right-click a thumbnail and choose **Copy** to copy it with annotations without reopening it.
 
 **Settings → Toolbar layout** switches immediately between **Top toolbars** (the original ribbon)
 and **Side panels** (the tool rail and properties panel). The choice and each layout's visibility
@@ -28,15 +34,19 @@ settings are remembered. Switching keeps the current image, annotations, selecti
 With Side panels, choose drawing tools on the left. The properties panel on the right shows color, pixel size,
 style presets and opacity for the current tool or selected annotation. Use the small chevrons
 on Shapes, Arrow, Check/X and Line to choose a preset, or use the visual style picker in the
-properties panel. Pixel sizes have quick presets, a continuous slider and plus/minus controls;
-each slider drag is one undoable edit. **Esc** cancels a slider drag.
+properties panel. Pixel sizes have quick presets, a continuous slider and plus/minus controls.
+Stroke and highlight sliders stop at 40 px for finer control; use plus/minus for larger sizes.
+Font sizes retain their full slider range. Each slider drag is one undoable edit.
+**Esc** cancels a slider drag.
 
 Selected text has side handles for independent box sizing. Drag left/right to rewrap text
 at the same font size, or top/bottom to adjust height while keeping every line visible.
 Corners scale the font. Resizing supports Undo/Redo and **Esc** cancellation.
 
-The **Settings** gear (or **F10**) opens a matching settings panel with appearance, capture,
-export, view and app actions. Settings save immediately. Choose **Purple**, **Orange**, **Blue**
+The **Settings** gear (or **F10**) opens the full settings panel in either UI. In Top toolbars,
+you can also use **Settings → Settings...**. **Appearance → New UI** switches to Side panels;
+**Classic UI** returns to Top toolbars. The panel includes appearance, capture,
+export, view and app actions. Settings save immediately. Choose **Purple**, **Blue**
 or **Teal**, then **Light** or **Dark**; both choices work with either layout and affect only
 the editor. **Custom color** opens the color spectrum with RGB and hex input for your own UI
 accent. Apply saves it; Cancel keeps the previous theme. Accent shades adjust for readable controls
@@ -44,8 +54,13 @@ in Light and Dark, while the chosen color is remembered when you switch presets.
 Capture shortcuts, auto copy, rendering, all border options and all six logo styles
 remain available. The capture button's chevron
 also offers an instant capture of all monitors. Zoom and Fit are in the bottom bar.
+In Side panels, clicking the bottom-right Fit / 100% control switches between fitting
+the image to the window and viewing it at actual size.
 Top toolbars retains the native menu bar and the original controls above the image.
-Copy feedback is a brief white pulse over the image, including its transparency; it never changes exports.
+Classic controls use consistent neutral surfaces and outlines in every theme. The selected
+drawing tool uses the accent color; Fit and other view modes use a neutral selected state.
+Copy feedback combines a stronger white pulse with a clearly visible **Copied to clipboard**
+confirmation for 1.4 seconds. The pulse follows image transparency; feedback never changes exports.
 
 [Application information](APP-INFO.md) describes installation and data storage.
 

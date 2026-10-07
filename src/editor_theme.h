@@ -1,8 +1,10 @@
 // UI colors never enter the image/export pipeline or replace annotation colors.
+// Keep stored indices stable; index 1 belonged to the retired Orange preset.
+constexpr std::array<int, 3> PresetThemeIndices = {0, 2, 3};
 constexpr std::array<Color, 4> ThemeAccents = {ClassicAccent, OrangeAccent, rgb(37, 99, 235),
                                                rgb(0, 133, 119)};
 constexpr std::array<const wchar_t *, 4> ThemeNames = {L"Purple", L"Orange", L"Blue", L"Teal"};
-Color customSolidAccent = rgb(172, 73, 0);
+Color customSolidAccent = ClassicAccent;
 Color mixColor(Color a, Color b, float amount)
 {
     auto component = [&](int shift) {
@@ -43,8 +45,7 @@ Color uiSolidAccent()
 {
     if (app.colorTheme == 4)
         return customSolidAccent;
-    // White labels need more contrast than the orange used for small accents.
-    return app.colorTheme == 1 ? rgb(172, 73, 0) : ThemeAccents[app.colorTheme];
+    return ThemeAccents[app.colorTheme];
 }
 double colorLuminance(Color c)
 {

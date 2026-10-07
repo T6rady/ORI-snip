@@ -9,6 +9,8 @@ required by this installer; your organization's installation policies still appl
 The app is installed locally under %LOCALAPPDATA%\Programs\Tiger Snip.
 Personal settings are stored in %LOCALAPPDATA%\Tiger Snip\TigerSnip.ini.
 Each Windows user has their own settings. The installer includes no personal settings.
+Fresh installations use the new Side panels UI with the Purple light theme.
+Existing users keep their saved UI layout and colors.
 The standalone Tiger Snip.exe also runs directly and uses those same personal settings.
 Windows Installed apps can uninstall Tiger Snip; settings remain for reinstalling.
 To reset everything after uninstalling, delete %LOCALAPPDATA%\Tiger Snip.
@@ -76,16 +78,20 @@ Its visual style picker retains all circle, rectangle, arrow, check/X and line p
 Use each tool's small chevron for quick access to its presets.
 Choosing a style in the properties panel updates the selected annotation in place.
 Stroke and font sizes have preset buttons, a pixel slider, and + / - controls.
-Drag the slider to choose any pixel size; a whole drag is one undo step.
+Stroke and highlight sliders stop at 40 px for finer control. Use + / - for larger sizes
+(up to 100 px for strokes, 80 px for highlights). Font sliders keep their full size range.
+A whole slider drag is one undo step.
 Esc or loss of pointer capture cancels the drag and restores the previous size.
 Opacity adjusts the selected annotation or the next mark, including Copy and Save.
 Highlights retain their existing translucent blending beneath the opacity setting.
 Undo/redo is beside New snip; Copy and Save are at the top right.
-A successful Copy or Ctrl+C briefly brightens the image with a white pulse, fading out in 280 ms.
+A successful Copy or Ctrl+C brightens the image with a white pulse, fading out in 500 ms.
+"Copied to clipboard" stays visible for 1.4 seconds, including on light screenshots.
 The pulse follows image transparency and adds no colored tint or outline.
 The flash stays in the editor and never appears in copied or saved pixels.
-The Settings gear or F10 opens the modern settings panel in Side panels.
-Appearance offers Top toolbars or Side panels, four color themes (Purple, Orange,
+The Settings gear or F10 opens the full settings panel in either UI.
+In Top toolbars, Settings > Settings... opens the same panel.
+Appearance offers Classic UI (Top toolbars) or New UI (Side panels), three color themes (Purple,
 Blue and Teal), and Light or Dark. Colors work with either layout and do not alter exports.
 Custom color opens the spectrum, RGB and hex picker for your own UI accent.
 Apply color saves it immediately; Cancel keeps the previous theme. The custom color is
@@ -139,7 +145,9 @@ New Save/Save As dialogs start there; you can still choose another destination.
 Ctrl+S on an already saved snip updates its existing file.
 
 Settings > Professional Border > Enabled is optional and OFF by default.
-Turning it on enables Blur and Rounded corners; uncheck either in the submenu to use the other alone.
+Blur and Rounded corners show OFF and are unavailable until Professional Border is on.
+Turning it on restores your saved choices (both effects are selected initially).
+Uncheck either in the submenu to use the other alone.
 It adds a soft gray halo without a hard outline and/or rounded corners to Copy and PNG Save.
 Blur adds 20 px transparent padding per side (40 px more in width/height).
 Rounded corners alone keep the original dimensions.
@@ -158,6 +166,9 @@ Enabled and selected style are remembered on close/exit; the preview shows/hides
 
 Recent keeps the last 10 captures, including the current one, in this PC's memory.
 Click Recent or press Ctrl+Shift+R to reopen a capture with its editable annotations.
+Right-click a recent thumbnail and choose Copy to copy it directly with its annotations
+and current export effects, keeping your current snip open. The welcome capture icon
+also starts a new snip when clicked.
 Closing the window leaves Tiger Snip in the tray and retains those captures.
 Closing, exiting, and taking a new snip happen immediately without a save prompt.
 Click the tray icon to snip. File > Exit quits entirely and clears the capture collection.

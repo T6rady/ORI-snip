@@ -225,7 +225,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         if (app.settingsPanelOpen && i >= app.settingsButtonsStart)
             continue;
         const auto &b = app.buttons[i];
-        if (recentPanelCommand(b.command) || curvedArrowCommand(b.command))
+        if (recentPanelCommand(b.command) || curvedArrowCommand(b.command) || b.command == WelcomeCapture)
             continue;
         const Rect r = b.rect;
         const bool available = enabled(b.command), hover = app.hover == b.command;
@@ -285,7 +285,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         {
             const bool opacity = b.command == OpacitySlider;
             const float minimum = opacity ? 0 : textMode() ? 8 : highlightMode() ? 4 : 1;
-            const float maximum = opacity ? 100 : textMode() ? 144 : highlightMode() ? 80 : 100;
+            const float maximum = opacity ? 100 : textMode() ? 144 : StrokeSliderMax;
             const float value = opacity ? propertyOpacity() * 100 : propertySize();
             const float cx =
                 r.left +
@@ -354,7 +354,7 @@ void paintEditorChrome(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
             const bool primary =
                 b.command == NewSnip || b.command == CaptureMenu || b.command == Copy;
             const bool outlined = b.command == Save || b.command == RecentSnips ||
-                                  b.command == TextBold || b.command == TextBox || b.command == Fit;
+                                  b.command == TextBold || b.command == TextBox || b.command == ToggleFit;
             if (primary)
             {
                 const Color bg = !available ? rgb(229, 232, 237)

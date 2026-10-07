@@ -34,9 +34,10 @@ constexpr UINT TrayMessage = WM_APP + 20, LaunchMessage = WM_APP + 21;
 constexpr UINT CaptureTimer = 1, StatusTimer = 2, SmokeTimer = 3, CopyFlashTimer = 4,
                SizeRepeatTimer = 5, TraceHeartbeatTimer = 6;
 constexpr UINT SizeRepeatDelay = 300, SizeRepeatInterval = 35;
+constexpr ULONGLONG CopyPulseDuration = 500, CopyNoticeDuration = 1400;
 constexpr float StatusHeight = 32;
 constexpr Color OrangeAccent = rgb(255, 119, 0), ClassicAccent = rgb(108, 72, 231);
-Color Accent = OrangeAccent, Ink = rgb(32, 38, 46), Muted = rgb(112, 121, 135);
+Color Accent = ClassicAccent, Ink = rgb(32, 38, 46), Muted = rgb(112, 121, 135);
 enum Command
 {
     NewSnip = 1001,
@@ -100,7 +101,7 @@ enum Command
     InterfaceClassic,
     InterfaceOrange,
     ThemePurple,
-    ThemeOrange,
+    ThemeOrange, // Retired preset; retain the command slot and stored theme numbering.
     ThemeBlue,
     ThemeTeal,
     ThemeCustom,
@@ -111,6 +112,9 @@ enum Command
     SettingsRenderer,
     SettingsAreaKey,
     SettingsAllKey,
+    Preferences,
+    WelcomeCapture,
+    ToggleFit,
     SettingsPageFirst = 2100,
     SettingsPageLast = SettingsPageFirst + 6,
     ColorFirst = PaletteFirst,
@@ -272,15 +276,15 @@ struct Application
     std::string preferenceError;
     bool autoCopy = true;
     bool exportPreferencesDirty = false;
-    ULONGLONG copyFlashStarted = 0;
+    ULONGLONG copyFlashStarted = 0, copyNoticeStarted = 0;
     HMENU logoMenu = nullptr;
     HMENU professionalMenu = nullptr;
     unsigned collapsedRows = 0;
     bool layoutPreferencesDirty = false, fullScreen = false, interactiveResize = false;
     bool menuHidden = false;
     bool classicUI = false;
-    unsigned colorTheme = 1;
-    Color customUIAccent = OrangeAccent;
+    unsigned colorTheme = 0;
+    Color customUIAccent = ClassicAccent;
     bool themePickerOpen = false;
     bool darkTheme = false, appearancePreferencesDirty = false;
     bool settingsPanelOpen = false;
@@ -613,14 +617,15 @@ void loadToolPreferences()
         app.softwareRendering =
             preferenceUInt(app.iniPath, L"Settings", L"SoftwareRendering", 0) != 0;
     app.classicUI = preferenceUInt(app.iniPath, L"Settings", L"ToolbarLayout", 1) == 0;
-    app.colorTheme = preferenceUInt(app.iniPath, L"Settings", L"ColorTheme", 1);
-    if (app.colorTheme > 4)
-        app.colorTheme = 1;
-    app.customUIAccent = preferenceUInt(app.iniPath, L"Settings", L"CustomUIAccent", OrangeAccent);
+    app.colorTheme = preferenceUInt(app.iniPath, L"Settings", L"ColorTheme", 0);
+    const bool normalizeTheme = app.colorTheme == 1 || app.colorTheme > 4;
+    if (normalizeTheme)
+        app.colorTheme = 0;
+    app.customUIAccent = preferenceUInt(app.iniPath, L"Settings", L"CustomUIAccent", ClassicAccent);
     if (app.customUIAccent > 0xffffff)
-        app.customUIAccent = OrangeAccent;
+        app.customUIAccent = ClassicAccent;
     app.darkTheme = preferenceUInt(app.iniPath, L"Settings", L"DarkTheme", 0) != 0;
-    app.appearancePreferencesDirty = false;
+    app.appearancePreferencesDirty = normalizeTheme;
     updateInterfaceColors();
     app.collapsedRows = preferenceUInt(app.iniPath, L"Settings", L"CollapsedRows", 0) & 7U;
     const unsigned topRows =
@@ -927,6 +932,7 @@ void releaseImage()
     finishDrag(true);
     KillTimer(app.window, CopyFlashTimer);
     app.copyFlashStarted = 0;
+    app.copyNoticeStarted = 0;
     finishTextEditing(true);
     app.pickingColor = false;
     app.pickerImage = {};
@@ -1093,7 +1099,8 @@ void updateView()
         app.view.origin =
             Point{(r.left + r.right) / 2, (r.top + r.bottom) / 2} - focus * app.view.scale;
     }
-    app.fit = app.fit || app.view.scale <= minimum + .00001f;
+    // Keep an explicit 100% choice when it happens to equal the fitted scale.
+    app.fit = app.fit || app.view.scale < minimum - .00001f;
     if (app.fit)
         app.view.fitTo(r, content, 1 / app.dpi);
     else
@@ -1684,6 +1691,13 @@ Rect recentPanelRect()
                                      : (!(app.collapsedRows & 1) ? 55 : 28);
     return {client.right - width - 8, top, client.right - 8, top + height};
 }
+Rect welcomeCaptureRect()
+{
+    const auto canvas = canvasRect();
+    const float middle = canvas.top + canvas.height() / 2,
+                cx = (canvas.left + canvas.right) / 2;
+    return {cx - 32, middle - 133, cx + 32, middle - 69};
+}
 #include "editor_classic_layout.h"
 #include "editor_layout.h"
 #include "editor_settings_layout.h"
@@ -1815,12 +1829,13 @@ void buildButtons()
             add(ToggleFormatting, L"", 28, toolbarHeight() + 10, 28);
         }
         const float footer = client.bottom - StatusHeight + 4;
-        x = client.right - 188;
+        x = client.right - 202;
         add(ZoomOut, L"-", 26, footer, 24);
         add(Actual, L"100%", 56, footer, 24);
         add(ZoomIn, L"+", 26, footer, 24);
         x += 10;
-        add(Fit, L"Fit", 42, footer, 24);
+        add(ToggleFit, !app.fit && std::abs(app.view.scale * app.dpi - 1) < .001f ? L"100%" : L"Fit",
+            56, footer, 24);
         if (app.fullScreen)
         {
             x = 12;
@@ -1833,6 +1848,9 @@ void buildButtons()
             add(NewSnip, L"Take a snip", 152, canvas.top + canvas.height() / 2 + 30, 42);
         }
     }
+
+    if (!hasImage() && canvasRect().height() > 290)
+        app.buttons.push_back({welcomeCaptureRect(), WelcomeCapture, L""});
 
     if (curvedArrowSelected() && app.tool == Tool::Select && app.drag == Drag::None &&
         !app.erasing && !app.cropping && !app.pickingColor && !app.textEdit)
@@ -1905,6 +1923,7 @@ void buildButtons()
             switch (b.command)
             {
             case NewSnip:
+            case WelcomeCapture:
                 hint = L"Capture an area (Ctrl+N)";
                 break;
             case CropTool:
@@ -1990,6 +2009,9 @@ void buildButtons()
             case Fit:
                 hint = L"Fit image to the window";
                 break;
+            case ToggleFit:
+                hint = app.fit ? L"Switch to actual size (100%)" : L"Fit image to the window";
+                break;
             case Actual:
                 hint = L"View at original size";
                 break;
@@ -2008,14 +2030,14 @@ void buildButtons()
                     (app.collapsedRows & 4) ? L"Show properties panel" : L"Hide properties panel";
                 break;
             case StrokeSlider:
-                hint = L"Drag to set an exact pixel size; Esc cancels; one undo step per drag";
+                hint = textMode() ? L"Drag to set font size; Esc cancels; one undo step per drag"
+                                  : L"Drag up to 40 px; use + / - for larger sizes; Esc cancels";
                 break;
             case OpacitySlider:
                 hint = L"Drag to adjust annotation opacity; Esc cancels";
                 break;
             case AppMenu:
-                hint = app.classicUI ? L"File, Edit, View, Settings and Help (F10)"
-                                     : L"Settings and app actions (F10)";
+                hint = L"Settings and app actions (F10)";
                 break;
             case CaptureMenu:
                 hint = L"Choose area or full-desktop capture";
@@ -2030,7 +2052,7 @@ void buildButtons()
                 if (paletteCommand(b.command))
                     hint = L"Use this color; right-click to edit or delete";
                 else if (recentChoice(b.command))
-                    hint = L"Reopen this snip with its annotations, crop, and undo history";
+                    hint = L"Click to reopen; right-click to copy this snip with its annotations";
             }
             }
             TOOLINFOW info{};
@@ -2101,9 +2123,9 @@ bool enabled(int id)
                       app.document.items[app.document.selected].a) >= .01f;
     if (id == Undo || id == Redo)
         return hasImage() && (id == Undo ? app.document.canUndo() : app.document.canRedo());
-    if (id == NewSnip || id == InstantSnip)
+    if (id == NewSnip || id == WelcomeCapture || id == InstantSnip)
         return !app.capturePending && !app.overlay;
-    if (id == Copy || id == Save || id == SaveAs || id == Fit || id == Actual || id == Eyedropper ||
+    if (id == Copy || id == Save || id == SaveAs || id == Fit || id == ToggleFit || id == Actual || id == Eyedropper ||
         id == CropTool || id == TextTool || id == HighlightTool || id == EraserTool ||
         id == RectangleTool || id == TextBold || id == TextBox || id == TextSizeMenu ||
         (id >= SelectTool && id <= LineTool) || (id >= CircleStyleMenu && id <= LineStyleMenu))
@@ -2140,8 +2162,8 @@ bool active(int id)
     }
     if (id == Eyedropper)
         return app.pickingColor;
-    if (hasImage() && (id == Fit || id == Actual))
-        return id == Fit ? app.fit : !app.fit && std::abs(app.view.scale * app.dpi - 1) < .001f;
+    if (hasImage() && (id == Fit || id == ToggleFit || id == Actual))
+        return id != Actual ? app.fit : !app.fit && std::abs(app.view.scale * app.dpi - 1) < .001f;
     return id >= SelectTool && id <= LineTool && static_cast<int>(app.tool) == id - SelectTool;
 }
 void ensureTarget()
@@ -2525,14 +2547,14 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         if (app.copyFlashStarted)
         {
             const float fade =
-                std::max(0.0f, 1 - (GetTickCount64() - app.copyFlashStarted) / 280.0f);
+                std::max(0.0f, 1 - float(GetTickCount64() - app.copyFlashStarted) / CopyPulseDuration);
             // Reuse the screenshot's alpha so padding and rounded corners stay transparent.
             // A white pulse brightens only the image, independent of the UI accent.
             rt->SetTransform(D2D1::Matrix3x2F::Scale(app.view.scale, app.view.scale) *
                              D2D1::Matrix3x2F::Translation(o.x, o.y));
             const auto antialias = rt->GetAntialiasMode();
             rt->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-            brush->SetColor(color(rgb(255, 255, 255), .24f * fade));
+            brush->SetColor(color(rgb(255, 255, 255), .45f * fade));
             const auto flashBounds = D2D1::RectF(0, 0, static_cast<float>(preview.width),
                                                  static_cast<float>(preview.height));
             rt->FillOpacityMask(display.get(), brush.get(), D2D1_OPACITY_MASK_CONTENT_GRAPHICS,
@@ -2585,7 +2607,8 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         // The compact layout keeps the primary action usable in short editor windows.
         if (canvas.height() > 290)
         {
-            rounded({cx - 32, middle - 133, cx + 32, middle - 69}, uiSelected(), 14);
+            rounded(welcomeCaptureRect(),
+                    app.hover == WelcomeCapture ? uiSelectedBorder() : uiSelected(), 14);
             drawUIIcon(rt, brush.get(), NewSnip, {cx - 10, middle - 111}, Accent);
             brush->SetColor(color(Accent));
             rt->DrawLine({cx + 38, middle - 129}, {cx + 38, middle - 117}, brush.get(), 2,
@@ -2635,7 +2658,7 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
         text(std::to_wstring(app.recent.size()) + L" of 10",
              {r.right - 116, r.top + 10, r.right - 48, r.top + 38}, Muted,
              app.graphics.smallFont.get(), true);
-        text(L"Kept until Tiger Snip exits",
+        text(L"Right-click to copy",
              {r.left + 16, r.bottom - 28, r.right - 150, r.bottom - 6}, Muted,
              app.graphics.smallFont.get());
         for (size_t slot = 0; slot < app.buttons.size(); ++slot)
@@ -2703,6 +2726,21 @@ void paintEditor(ID2D1RenderTarget *alternate = nullptr)
                  {cell.right - 60, cell.top + 80, cell.right - 6, cell.bottom},
                  current ? Accent : Muted, app.graphics.smallFont.get(), true);
         }
+    }
+    if (app.copyNoticeStarted)
+    {
+        // Explicit feedback remains readable even when the copied screenshot is white.
+        const float width = std::min(244.0f, canvas.width() - 16),
+                    left = (canvas.left + canvas.right - width) / 2;
+        const Rect notice{left, canvas.top + 18, left + width, canvas.top + 62};
+        rounded(notice, rgb(24, 31, 42), 10);
+        brush->SetColor(color(rgb(104, 231, 160)));
+        rt->DrawLine({left + 16, notice.top + 23}, {left + 21, notice.top + 28}, brush.get(), 2.5f,
+                     app.graphics.roundStroke.get());
+        rt->DrawLine({left + 21, notice.top + 28}, {left + 31, notice.top + 17}, brush.get(), 2.5f,
+                     app.graphics.roundStroke.get());
+        text(L"Copied to clipboard", {left + 42, notice.top, notice.right - 12, notice.bottom},
+             rgb(255, 255, 255), app.graphics.font.get());
     }
     if (app.settingsPanelOpen)
         paintSettingsPanel(rt, brush.get());
@@ -3304,7 +3342,7 @@ void movePropertySlider(Point point)
         return;
     const bool opacity = app.sliderDrag == OpacitySlider;
     const float minimum = opacity ? 0 : textMode() ? 8 : highlightMode() ? 4 : 1;
-    const float maximum = opacity ? 100 : textMode() ? 144 : highlightMode() ? 80 : 100;
+    const float maximum = opacity ? 100 : textMode() ? 144 : StrokeSliderMax;
     const float fraction = std::clamp((point.x - b->rect.left) / b->rect.width(), 0.0f, 1.0f);
     setPropertyValue(app.sliderDrag, std::round(minimum + fraction * (maximum - minimum)));
 }
@@ -3937,13 +3975,14 @@ Bitmap renderedExport()
 {
     return app.graphics.exportImage(app.image, app.document.items, app.exportOptions);
 }
-void startCopyFeedback()
+void startCopyFeedback(bool pulseImage = true)
 {
-    if (!hasImage() || !IsWindowVisible(app.window))
+    if (!IsWindowVisible(app.window))
         return;
-    app.copyFlashStarted = GetTickCount64();
-    if (!SetTimer(app.window, CopyFlashTimer, 16, nullptr))
-        app.copyFlashStarted = false; // Copy already succeeded; omit the optional animation.
+    app.copyNoticeStarted = GetTickCount64();
+    app.copyFlashStarted = pulseImage && hasImage() ? app.copyNoticeStarted : 0;
+    if (!SetTimer(app.window, CopyFlashTimer, app.copyFlashStarted ? 16 : CopyNoticeDuration, nullptr))
+        app.copyFlashStarted = app.copyNoticeStarted = 0; // Copy succeeded; omit optional feedback.
     repaint();
 }
 void copyImage(bool automatic = false)
@@ -3969,6 +4008,55 @@ void copyImage(bool automatic = false)
         startCopyFeedback();
     status(automatic ? L"Copied automatically - ready to paste; Ctrl+C copies your edits"
                      : L"Copied image and annotations - ready to paste");
+}
+void copyRecentSnip(int index)
+{
+    if (index < 0 || index >= static_cast<int>(app.recent.size()) || app.capturePending || app.overlay)
+        return;
+    if (index == app.activeRecent)
+    {
+        copyImage();
+        return;
+    }
+    const auto &snip = app.recent[index];
+    if (snip.image.empty())
+        return;
+    const auto bitmap = app.graphics.exportImage(snip.image, snip.document.items, app.exportOptions);
+    const auto png = app.graphics.png(bitmap);
+    ClipboardFailure failure;
+    if (!copyBitmap(app.window, bitmap, png, &failure))
+    {
+        if (failure.unavailable)
+            status(L"Clipboard is busy. Right-click the recent snip to try again.");
+        else
+            error(app.window, windowsError(failure.operation, failure.code).c_str());
+        return;
+    }
+    startCopyFeedback(false);
+    status(L"Copied recent snip " + std::to_wstring(snip.sequence) + L" - ready to paste");
+}
+void recentContextMenu(POINT point)
+{
+    POINT client = point;
+    ScreenToClient(app.window, &client);
+    const auto button = std::find_if(app.buttons.begin(), app.buttons.end(), [&](const Button &b) {
+        return recentChoice(b.command) && b.rect.contains({client.x / app.dpi, client.y / app.dpi}) &&
+               enabled(b.command);
+    });
+    if (button == app.buttons.end())
+        return;
+    const int index = button->command - RecentChoiceFirst;
+    app.recentFocus = static_cast<int>(app.recent.size()) - 1 - index;
+    HMENU menu = CreatePopupMenu();
+    if (!menu)
+        return;
+    AppendMenuW(menu, MF_STRING, Copy, L"&Copy");
+    SetMenuDefaultItem(menu, Copy, FALSE);
+    const int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, 0,
+                                      app.window, nullptr);
+    DestroyMenu(menu);
+    if (choice == Copy)
+        copyRecentSnip(index);
 }
 bool existingFolder(const std::wstring &path)
 {
@@ -4123,6 +4211,7 @@ void trayMenu()
     AppendMenuW(menu, MF_STRING, NewSnip, L"Snip now");
     AppendMenuW(menu, MF_STRING, InstantSnip, L"Capture all monitors now");
     AppendMenuW(menu, MF_STRING, ShowEditor, L"Open editor");
+    AppendMenuW(menu, MF_STRING, Preferences, L"Settings...");
     AppendMenuW(menu, MF_STRING, Settings, L"Keyboard shortcuts...");
     AppendMenuW(menu, MF_STRING | (app.autoCopy ? MF_CHECKED : 0), AutoCopy,
                 L"Auto copy new snips");
@@ -4322,7 +4411,7 @@ void command(int id, bool editSelectedStyle)
     if (app.settingsPanelOpen &&
         (id == NewSnip || id == InstantSnip || id == RecentSnips || id == Copy || id == Save ||
          id == SaveAs || id == Undo || id == Redo || id == DeleteSelected || id == Clear ||
-         id == CropTool || id == EraserTool || id == FullScreen || id == Fit || id == Actual || id == Exit))
+         id == CropTool || id == EraserTool || id == FullScreen || id == Fit || id == ToggleFit || id == Actual || id == Exit))
         closeSettingsPanel();
     if (app.sliderDrag)
         finishPropertySlider();
@@ -4489,7 +4578,6 @@ void command(int id, bool editSelectedStyle)
         customUIColor();
         break;
     case ThemePurple:
-    case ThemeOrange:
     case ThemeBlue:
     case ThemeTeal:
     case AppearanceLight:
@@ -4520,8 +4608,6 @@ void command(int id, bool editSelectedStyle)
         const bool classic = id == InterfaceClassic;
         if (classic == app.classicUI)
             break;
-        if (classic)
-            closeSettingsPanel();
         stopSizeRepeat();
         finishDrag(true);
         finishTextEditing(false, false);
@@ -4535,6 +4621,7 @@ void command(int id, bool editSelectedStyle)
         app.inspectorScroll = 0;
         app.hover = app.pressed = 0;
         app.copyFlashStarted = 0;
+        app.copyNoticeStarted = 0;
         if (!app.fullScreen)
             SetMenu(app.window, classic ? app.windowedMenu : nullptr);
         updateMenus();
@@ -4569,53 +4656,31 @@ void command(int id, bool editSelectedStyle)
             command(choice);
         break;
     }
+    case Preferences:
     case AppMenu: {
-        if (!app.classicUI)
+        if (app.settingsPanelOpen)
         {
-            if (app.settingsPanelOpen)
+            if (id == AppMenu)
                 closeSettingsPanel();
-            else
-            {
-                finishPropertySlider();
-                stopSizeRepeat();
-                finishDrag(true);
-                finishTextEditing(false, false);
-                closeRecent();
-                app.settingsPanelOpen = true;
-                app.settingsRecording = 0;
-                app.settingsError.clear();
-                app.settingsFocus = SettingsPageFirst + app.settingsPage;
-                app.settingsStartup = startupEnabled();
-                buildButtons();
-                SetFocus(app.window);
-                refreshEditorCursor();
-                repaint();
-            }
             break;
         }
-        updateMenus();
-        HMENU root = app.menuHidden || app.fullScreen ? app.windowedMenu : GetMenu(app.window);
-        HMENU popup = CreatePopupMenu();
-        if (!popup || !root)
-        {
-            if (popup)
-                DestroyMenu(popup);
-            break;
-        }
-        const wchar_t *labels[] = {L"File", L"Edit", L"View", L"Settings", L"Help"};
-        for (int i = 0; i < 5; ++i)
-            AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(GetSubMenu(root, i)),
-                        labels[i]);
-        POINT anchor{static_cast<LONG>(72 * app.dpi),
-                     static_cast<LONG>((clientDips().bottom - StatusHeight - 52) * app.dpi)};
-        ClientToScreen(app.window, &anchor);
-        const int choice = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-                                          anchor.x, anchor.y, 0, app.window, nullptr);
-        for (int i = 4; i >= 0; --i)
-            RemoveMenu(popup, i, MF_BYPOSITION);
-        DestroyMenu(popup);
-        if (choice)
-            command(choice);
+        closeSettings();
+        if (!IsWindowVisible(app.window) || IsIconic(app.window))
+            showEditor();
+        finishPropertySlider();
+        stopSizeRepeat();
+        finishDrag(true);
+        finishTextEditing(false, false);
+        closeRecent();
+        app.settingsPanelOpen = true;
+        app.settingsRecording = 0;
+        app.settingsError.clear();
+        app.settingsFocus = SettingsPageFirst + app.settingsPage;
+        app.settingsStartup = startupEnabled();
+        buildButtons();
+        SetFocus(app.window);
+        refreshEditorCursor();
+        repaint();
         break;
     }
     case CropTool:
@@ -4688,6 +4753,7 @@ void command(int id, bool editSelectedStyle)
         break;
     }
     case NewSnip:
+    case WelcomeCapture:
         startSnip();
         break;
     case Copy:
@@ -4763,6 +4829,10 @@ void command(int id, bool editSelectedStyle)
         updateView();
         repaint();
         break;
+    case ToggleFit:
+        if (enabled(id))
+            command(app.fit ? Actual : Fit);
+        break;
     case FullScreen:
         toggleFullScreen();
         break;
@@ -4827,6 +4897,7 @@ void command(int id, bool editSelectedStyle)
         changeThickness(1);
         break;
     case Settings:
+        closeSettingsPanel();
         openSettings();
         break;
     case RenderingSettings:
@@ -4849,8 +4920,6 @@ void command(int id, bool editSelectedStyle)
                        : id == ProfessionalRounded ? app.exportOptions.professionalRounded
                                                    : app.exportOptions.samtecLogo;
         option = !option;
-        if (id == ProfessionalBorder && option)
-            app.exportOptions.professionalBlur = app.exportOptions.professionalRounded = true;
         app.exportPreferencesDirty = true;
         if (hasImage())
         {
@@ -5180,14 +5249,15 @@ HMENU createMenu()
     AppendMenuW(view, MF_STRING, ToggleActions, L"&Command bar");
     AppendMenuW(view, MF_STRING, ToggleTools, L"&Tool rail");
     AppendMenuW(view, MF_STRING, ToggleFormatting, L"&Properties panel");
+    AppendMenuW(settings, MF_STRING, Preferences, L"&Settings...");
     AppendMenuW(settings, MF_STRING, Settings, L"&Keyboard shortcuts...");
     app.interfaceMenu = CreatePopupMenu();
-    AppendMenuW(app.interfaceMenu, MF_STRING, InterfaceClassic, L"&Top toolbars");
-    AppendMenuW(app.interfaceMenu, MF_STRING, InterfaceOrange, L"&Side panels");
+    AppendMenuW(app.interfaceMenu, MF_STRING, InterfaceClassic, L"&Top toolbars (classic UI)");
+    AppendMenuW(app.interfaceMenu, MF_STRING, InterfaceOrange, L"&Side panels (new UI)");
     AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.interfaceMenu),
                 L"&Toolbar layout");
     app.colorThemeMenu = CreatePopupMenu();
-    for (int i = 0; i < 4; ++i)
+    for (int i : PresetThemeIndices)
         AppendMenuW(app.colorThemeMenu, MF_STRING, ThemePurple + i, ThemeNames[i]);
     AppendMenuW(app.colorThemeMenu, MF_STRING, ThemeCustom, L"&Custom color...");
     AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(app.colorThemeMenu),
@@ -5260,10 +5330,10 @@ void updateMenus()
                   MF_BYCOMMAND |
                       (app.exportOptions.professionalBorder ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, ProfessionalBlur,
-                  MF_BYCOMMAND | (app.exportOptions.professionalBlur ? MF_CHECKED : MF_UNCHECKED));
+                  MF_BYCOMMAND | (settingsControlSelected(ProfessionalBlur) ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(menu, ProfessionalRounded,
                   MF_BYCOMMAND |
-                      (app.exportOptions.professionalRounded ? MF_CHECKED : MF_UNCHECKED));
+                      (settingsControlSelected(ProfessionalRounded) ? MF_CHECKED : MF_UNCHECKED));
     for (int id : {ProfessionalBlur, ProfessionalRounded})
         EnableMenuItem(menu, id,
                        MF_BYCOMMAND |
@@ -5688,6 +5758,24 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
     case WM_CONTEXTMENU:
         if (app.settingsPanelOpen)
             return 0;
+        if (app.recentOpen)
+        {
+            POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            if (point.x == -1 && point.y == -1)
+            {
+                const auto button = std::find_if(app.buttons.begin(), app.buttons.end(), [](const Button &b) {
+                    return b.command == RecentChoiceFirst + static_cast<int>(app.recent.size()) - 1 -
+                                            app.recentFocus;
+                });
+                if (button == app.buttons.end())
+                    return 0;
+                point = {static_cast<LONG>((button->rect.left + 12) * app.dpi),
+                         static_cast<LONG>((button->rect.top + 12) * app.dpi)};
+                ClientToScreen(app.window, &point);
+            }
+            recentContextMenu(point);
+            return 0;
+        }
         if (GET_X_LPARAM(lp) != -1 || GET_Y_LPARAM(lp) != -1)
             paletteMenu({GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         return 0;
@@ -5877,11 +5965,16 @@ LRESULT mainMessage(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
         }
         else if (wp == CopyFlashTimer)
         {
-            if (!app.copyFlashStarted || GetTickCount64() - app.copyFlashStarted >= 280)
-            {
-                KillTimer(hwnd, CopyFlashTimer);
+            const auto now = GetTickCount64();
+            if (app.copyFlashStarted && now - app.copyFlashStarted >= CopyPulseDuration)
                 app.copyFlashStarted = 0;
-            }
+            if (app.copyNoticeStarted && now - app.copyNoticeStarted >= CopyNoticeDuration)
+                app.copyNoticeStarted = 0;
+            if (!app.copyFlashStarted && !app.copyNoticeStarted)
+                KillTimer(hwnd, CopyFlashTimer);
+            else if (!app.copyFlashStarted)
+                SetTimer(hwnd, CopyFlashTimer,
+                         static_cast<UINT>(CopyNoticeDuration - (now - app.copyNoticeStarted)), nullptr);
             repaint();
         }
         else if (wp == StatusTimer)
@@ -9471,9 +9564,10 @@ int applicationMain(HINSTANCE instance, int show)
                     throw std::runtime_error(
                         "Disabled professional components should be unavailable in the submenu.");
                 command(ProfessionalBorder);
-                if (!app.exportOptions.professionalBlur || !app.exportOptions.professionalRounded)
+                if (!app.exportOptions.professionalBlur || app.exportOptions.professionalRounded)
                     throw std::runtime_error(
-                        "Re-enabling Professional Border did not restore both components.");
+                        "Re-enabling Professional Border lost the saved component choices.");
+                command(ProfessionalRounded); // Use both effects for the remaining export checks.
                 smokeMenuPreviewPath = L"smoke-test-professional-menu.png";
                 smokeMenuPreviewError.clear();
                 updateMenus();
@@ -9652,7 +9746,8 @@ int applicationMain(HINSTANCE instance, int show)
                     throw std::runtime_error(
                         "Copy flash was invisible or changed exported pixels.");
                 saveBytes(L"smoke-test-copy-flash.png", app.graphics.png(feedback));
-                app.copyFlashStarted = GetTickCount64() - 400;
+                app.copyFlashStarted = GetTickCount64() - CopyPulseDuration - 1;
+                app.copyNoticeStarted = GetTickCount64() - CopyNoticeDuration - 1;
                 SendMessageW(window, WM_TIMER, CopyFlashTimer, 0);
                 if (app.copyFlashStarted || renderEditorPreview().pixels != beforeFeedback.pixels)
                     throw std::runtime_error("Copy flash did not expire cleanly.");

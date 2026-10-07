@@ -1,4 +1,5 @@
 // Included inside the editor's private namespace. All geometry is in device-independent pixels.
+constexpr float StrokeSliderMax = 40;
 Tool inspectorTool()
 {
     return selected() ? app.document.items[app.document.selected].kind : app.tool;

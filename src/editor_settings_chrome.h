@@ -25,9 +25,9 @@ bool settingsControlSelected(int id)
     case ProfessionalBorder:
         return app.exportOptions.professionalBorder;
     case ProfessionalBlur:
-        return app.exportOptions.professionalBlur;
+        return app.exportOptions.professionalBorder && app.exportOptions.professionalBlur;
     case ProfessionalRounded:
-        return app.exportOptions.professionalRounded;
+        return app.exportOptions.professionalBorder && app.exportOptions.professionalRounded;
     case SamtecLogo:
         return app.exportOptions.samtecLogo;
     case ToggleActions:
@@ -47,9 +47,12 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         rt->FillRoundedRectangle(
             D2D1::RoundedRect({r.left, r.top, r.right, r.bottom}, radius, radius), brush);
     };
-    auto text = [&](const std::wstring &s, Rect r, Color fg, bool small = false) {
+    auto text = [&](const std::wstring &s, Rect r, Color fg, bool small = false,
+                    bool centered = false) {
         auto font = small ? app.graphics.smallFont.get() : app.graphics.font.get();
-        font->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        font->SetTextAlignment(centered ? DWRITE_TEXT_ALIGNMENT_CENTER
+                                        : DWRITE_TEXT_ALIGNMENT_LEADING);
+        font->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         brush->SetColor(color(fg));
         rt->DrawText(s.c_str(), static_cast<UINT32>(s.size()), font,
                      {r.left, r.top, r.right, r.bottom}, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -70,7 +73,7 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
     fill({l.panel.left + 1, l.panel.bottom - 53, l.panel.right - 1, l.panel.bottom - 52},
          uiBorder());
     text(app.settingsError.empty() ? L"Changes are saved automatically." : app.settingsError,
-         {l.panel.left + 24, l.panel.bottom - 46, l.panel.right - 124, l.panel.bottom - 10},
+         {l.panel.left + 24, l.panel.bottom - 45, l.panel.right - 124, l.panel.bottom - 13},
          app.settingsError.empty() ? Muted : Ink, true);
     for (const auto &control : l.controls)
     {
@@ -86,17 +89,35 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
         const bool selected = settingsControlSelected(control.command);
         const bool hover = control.command && app.hover == control.command;
         const Color fg = available ? Ink : Muted;
-        if (control.kind == SettingsControlKind::Heading ||
+        if (control.kind == SettingsControlKind::Group)
+        {
+            fill(r, uiRaised(), 8);
+            brush->SetColor(color(uiBorder()));
+            rt->DrawRoundedRectangle(
+                D2D1::RoundedRect({r.left + .5f, r.top + .5f, r.right - .5f, r.bottom - .5f}, 8, 8),
+                brush, 1);
+            fill({r.left + 12, r.top + 64, r.right - 12, r.top + 65}, uiBorder());
+        }
+        else if (control.kind == SettingsControlKind::Heading ||
             control.kind == SettingsControlKind::Text)
         {
-            text(control.title, {r.left, r.top, r.right, r.top + 29}, Ink);
+            text(control.title, {r.left, r.top, r.right, r.top + 29},
+                 app.settingsPage == 3 && !control.command && control.kind == SettingsControlKind::Text
+                     ? Muted : Ink);
             if (!control.detail.empty())
                 text(control.detail, {r.left, r.top + 30, r.right, r.bottom}, Muted, true);
         }
         else
         {
-            fill(r, selected ? uiSelected() : hover ? uiRaised() : uiSurface(), 7);
-            if (control.kind != SettingsControlKind::Navigation)
+            const bool nested = control.kind == SettingsControlKind::NestedToggle;
+            const bool borderHeader = control.command == ProfessionalBorder;
+            if (borderHeader)
+                fill({r.left + 1, r.top + 1, r.right - 1, r.bottom},
+                     selected ? uiSelected() : uiSurface(), 7);
+            else if (!nested || selected || hover)
+                fill(r, selected ? uiSelected() : hover ? (nested ? uiSurface() : uiRaised())
+                                                        : uiSurface(), 7);
+            if (control.kind != SettingsControlKind::Navigation && !nested && !borderHeader)
             {
                 brush->SetColor(color(selected ? uiSelectedBorder() : uiBorder()));
                 rt->DrawRoundedRectangle(
@@ -105,9 +126,9 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                     brush, 1);
             }
             if (control.kind == SettingsControlKind::Navigation)
-                text(control.title, {r.left + 12, r.top + 5, r.right - 8, r.bottom},
+                text(control.title, {r.left + 12, r.top, r.right - 8, r.bottom},
                      selected ? uiAccentText() : fg);
-            else if (control.kind == SettingsControlKind::Toggle)
+            else if (control.kind == SettingsControlKind::Toggle || nested)
             {
                 text(control.title, {r.left + 12, r.top + 9, r.right - 64, r.top + 33}, fg);
                 text(control.detail, {r.left + 12, r.top + 34, r.right - 64, r.bottom - 4}, Muted,
@@ -129,11 +150,11 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                     rt->DrawRoundedRectangle(D2D1::RoundedRect(
                         {r.left + 12, r.top + 15, r.left + 38, r.top + 41}, 6, 6), brush, 1);
                 }
-                text(control.title, {r.left + 48, r.top + 15, r.right - 28, r.bottom}, fg);
+                text(control.title, {r.left + 48, r.top, r.right - 28, r.bottom}, fg);
                 if (control.command == ThemeCustom)
-                    text(control.detail, {r.left + 160, r.top + 15, r.right - 28, r.bottom}, Muted, true);
+                    text(control.detail, {r.left + 160, r.top, r.right - 28, r.bottom}, Muted, true);
                 if (selected)
-                    text(L"\u2713", {r.right - 24, r.top + 15, r.right - 6, r.bottom}, Accent);
+                    text(L"\u2713", {r.right - 24, r.top, r.right - 6, r.bottom}, Accent);
             }
             else if (control.kind == SettingsControlKind::Logo)
             {
@@ -174,10 +195,15 @@ void paintSettingsPanel(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *brush)
                 }
                 const bool recording = app.settingsRecording == control.command;
                 if (control.command != SettingsDismiss)
-                    text(control.title,
-                     {r.left + 12, r.top + (control.detail.empty() ? 8 : 10), r.right - 12,
-                      r.top + 34},
-                     selected ? uiAccentText() : fg);
+                {
+                    // Single-line labels use the button's actual height, including Done's
+                    // shorter footer button. Detailed rows retain their two-line layout.
+                    const Rect label = control.detail.empty()
+                                           ? Rect{r.left + 12, r.top, r.right - 12, r.bottom}
+                                           : Rect{r.left + 12, r.top + 10, r.right - 12, r.top + 34};
+                    text(control.title, label, selected ? uiAccentText() : fg, false,
+                         control.command == SettingsDone);
+                }
                 if (!control.detail.empty())
                     text(control.detail, {r.left + 12, r.top + 37, r.right - 12, r.bottom - 6},
                          recording ? Accent : Muted, true);
